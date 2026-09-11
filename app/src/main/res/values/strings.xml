@@ -4,4 +4,25 @@
     <string name="skylar_status">READY FOR SYSTEM DEPLOYMENT</string>
     <string name="skylar_version">v0.1.0-alpha • ABX Architecture</string>
     <string name="skylar_description">Initial visual shell initialized. Core system services, mesh networking, and policy engine awaiting integration.</string>
+
+    <!-- Diagnostics and Crash Reporting -->
+    <string name="crash_title">System Diagnostic Report</string>
+    <string name="crash_subtitle">An uncaught exception occurred in the Skylar runtime environment.</string>
+    <string name="crash_unknown_type">Unknown Exception</string>
+    <string name="crash_unknown_message">No error message provided.</string>
+    <string name="crash_copied">Crash report copied to clipboard.</string>
+    <string name="crash_btn_copy">Copy Full Report</string>
+    <string name="crash_btn_restart">Restart Skylar</string>
+    <string name="error_fallback_toast">An error occurred.</string>
+    <string name="error_restart_failed">Unable to restart application.</string>
+    <string name="error_unknown_reference">SKYLAR-UNKNOWN</string>
+    <string name="error_reference_format">Reference Code: %1$s</string>
+    <string name="error_user_title">System Recovery Notice</string>
+    <string name="error_user_description">Skylar encountered an unrecoverable exception and terminated safely. Please provide the reference code below to support for diagnosis.</string>
+    <string name="error_btn_restart">Restart Application</string>
+    <string name="error_btn_share">Share Reference Code</string>
+    <string name="error_share_body">Skylar Diagnostic Report\nReference: %1$s\n\n%2$s</string>
+    <string name="error_share_subject">Skylar Crash Diagnostic [%1$s]</string>
+    <string name="error_share_chooser_title">Share Diagnostic Report</string>
+    <string name="error_share_failed">Unable to share diagnostic report.</string>
 </resources>

@@ -1,6 +1,6 @@
 {
   "name": "Skylar",
-  "description": "Initial visual mockup scaffold for Skylar",
+  "description": "Autonomous Edge Intelligence system shell with diagnostics and crash reporting integration",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

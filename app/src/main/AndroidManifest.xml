@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -22,6 +24,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".diagnostics.CrashActivity"
+            android:exported="false"
+            android:label="@string/crash_title"
+            android:process=":crash"
+            android:theme="@style/Theme.Skylar" />
+        <activity
+            android:name=".diagnostics.UserFacingErrorActivity"
+            android:exported="false"
+            android:label="@string/error_user_title"
+            android:process=":crash"
+            android:theme="@style/Theme.Skylar" />
     </application>
 
 </manifest>
