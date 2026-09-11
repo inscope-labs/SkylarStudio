@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Skylar</string>
+    <string name="skylar_tagline">Autonomous Edge Intelligence</string>
+    <string name="skylar_status">READY FOR SYSTEM DEPLOYMENT</string>
+    <string name="skylar_version">v0.1.0-alpha • ABX Architecture</string>
+    <string name="skylar_description">Initial visual shell initialized. Core system services, mesh networking, and policy engine awaiting integration.</string>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="skylar_bg">#070D1E</color>
+    <color name="skylar_card_bg">#0E172F</color>
+    <color name="skylar_card_stroke">#1E294B</color>
+    <color name="skylar_primary">#38BDF8</color>
+    <color name="skylar_primary_variant">#0284C7</color>
+    <color name="skylar_text_primary">#F8FAFC</color>
+    <color name="skylar_text_secondary">#94A3B8</color>
+    <color name="skylar_accent">#818CF8</color>
+    <color name="skylar_chip_bg">#132347</color>
+    <color name="skylar_status_indicator">#10B981</color>
+    <color name="skylar_white">#FFFFFF</color>
+</resources>
