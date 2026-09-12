@@ -49,7 +49,12 @@ android {
   buildFeatures {
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      isReturnDefaultValues = true
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -67,4 +72,5 @@ secrets {
 dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.activity)
+  testImplementation(libs.junit)
 }

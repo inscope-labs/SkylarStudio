@@ -25,4 +25,12 @@
     <string name="error_share_subject">Skylar Crash Diagnostic [%1$s]</string>
     <string name="error_share_chooser_title">Share Diagnostic Report</string>
     <string name="error_share_failed">Unable to share diagnostic report.</string>
+    <!-- Prototype Gateway and Targets -->
+    <string name="target_starlight">Starlight Execution Agent</string>
+    <string name="target_sfm">System File Manager</string>
+    <string name="target_xtools">System Tools &amp; Automation</string>
+    <string name="mesh_status_connected">Connected to Private Mesh</string>
+    <string name="mesh_status_disconnected">Disconnected from Mesh</string>
+    <string name="mesh_status_connecting">Enrolling in Mesh...</string>
+    <string name="policy_status_active">Policy Engine Active</string>
 </resources>
