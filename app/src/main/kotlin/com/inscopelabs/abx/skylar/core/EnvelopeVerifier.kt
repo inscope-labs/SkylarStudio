@@ -2,130 +2,104 @@ package com.inscopelabs.abx.skylar.core
 
 import com.inscopelabs.abx.skylar.common.Result
 import com.inscopelabs.abx.skylar.config.SkylarConfig
+import com.inscopelabs.abx.skylar.crypto.Base64Codec
+import com.inscopelabs.abx.skylar.crypto.EcdsaP256SignatureProvider
+import com.inscopelabs.abx.skylar.crypto.KeyRegistry
+import com.inscopelabs.abx.skylar.crypto.SignatureProvider
 import com.inscopelabs.abx.skylar.diagnostics.Logger
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 
 /**
- * Data representation of a Signed Request Envelope received by the Gateway.
- */
-data class RequestEnvelope(
-    val callerId: String,
-    val capability: String,
-    val params: Map<String, Any?> = emptyMap(),
-    val nonce: String,
-    val issuedAt: Long,
-    val expiresAt: Long,
-    val workflowHash: String,
-    val signature: String,
-    val scope: String? = null
-)
-
-/**
- * Verifier for signed request envelopes.
+ * Verifier for signed request envelopes (architecture doc §2).
  *
- * Security Contract:
- * - Bounds request validity via issued_at / expires_at with clock skew tolerance.
- * - Enforces workflow hash integrity binding caller_id + capability + params + nonce + expires_at.
- * - Validates cryptographic signature against caller's registered public key.
+ * This replaces the earlier prototype's `verifySignature()`:
+ *
+ *     return signature.startsWith("sig_") || signature.length >= 16
+ *
+ * which accepted any sufficiently long string as a valid signature — a
+ * fail-open stub sitting in the one place the entire security contract
+ * depends on ("Transport is never authorization. Every request is
+ * independently verified by Skylar Core." — Guiding Principle #1).
+ * Every check below fails closed: any exception, mismatch, or missing
+ * key is a DENY. Nothing here defaults to ALLOW.
+ *
+ * Requires a [KeyRegistry] with an entry for the caller — an
+ * unregistered caller_id is rejected before signature math is even
+ * attempted, since there would be nothing to verify against.
  */
 class EnvelopeVerifier(
-    private val config: SkylarConfig = SkylarConfig.DEFAULT
+    private val keyRegistry: KeyRegistry,
+    private val config: SkylarConfig = SkylarConfig.DEFAULT,
+    private val signatureProvider: SignatureProvider = EcdsaP256SignatureProvider()
 ) {
     companion object {
         private const val TAG = "SkylarEnvelopeVerifier"
     }
 
-    /**
-     * Verifies the envelope's structure, time validity, workflow hash, and cryptographic signature.
-     */
     fun verify(envelope: RequestEnvelope): Result<Unit> {
-        Logger.d(TAG, "Starting verification for envelope: caller=${envelope.callerId}, capability=${envelope.capability}, nonce=${envelope.nonce}")
+        Logger.d(TAG, "Verifying envelope: caller=${envelope.callerId}, capability=${envelope.capability}, nonce=${envelope.nonce}")
 
-        // 1. Check required fields
-        if (envelope.callerId.isBlank()) {
-            Logger.w(TAG, "Envelope verification FAILED: callerId is blank")
-            return Result.Error("Missing caller_id", errorCode = "MISSING_CALLER_ID")
-        }
-        if (envelope.capability.isBlank()) {
-            Logger.w(TAG, "Envelope verification FAILED: capability is blank")
-            return Result.Error("Missing capability", errorCode = "MISSING_CAPABILITY")
-        }
-        if (envelope.nonce.isBlank()) {
-            Logger.w(TAG, "Envelope verification FAILED: nonce is blank")
-            return Result.Error("Missing nonce", errorCode = "MISSING_NONCE")
-        }
+        if (envelope.callerId.isBlank()) return deny(envelope, "Missing caller_id", "MISSING_CALLER_ID")
+        if (envelope.capability.isBlank()) return deny(envelope, "Missing capability", "MISSING_CAPABILITY")
+        if (envelope.nonce.isBlank()) return deny(envelope, "Missing nonce", "MISSING_NONCE")
+        if (envelope.signature.isBlank()) return deny(envelope, "Missing signature", "MISSING_SIGNATURE")
 
-        // 2. Temporal validity checks
         val now = System.currentTimeMillis()
         val skew = config.clockSkewToleranceMs
 
         if (envelope.issuedAt > now + skew) {
-            Logger.w(TAG, "Envelope verification FAILED: issued_at is in future (${envelope.issuedAt} > $now + $skew)")
-            return Result.Error("Envelope issued_at is in the future", errorCode = "ENVELOPE_FUTURE_ISSUED")
+            return deny(envelope, "issued_at is in the future", "ENVELOPE_FUTURE_ISSUED")
         }
-
-        if (envelope.expiresAt < now - skew) {
-            Logger.w(TAG, "Envelope verification FAILED: expires_at is in past (${envelope.expiresAt} < $now - $skew)")
-            return Result.Error("Envelope has expired", errorCode = "ENVELOPE_EXPIRED")
-        }
-
         if (envelope.expiresAt < envelope.issuedAt) {
-            Logger.w(TAG, "Envelope verification FAILED: expires_at (${envelope.expiresAt}) is before issued_at (${envelope.issuedAt})")
-            return Result.Error("Envelope expires_at is before issued_at", errorCode = "ENVELOPE_INVALID_LIFETIME")
+            return deny(envelope, "expires_at is before issued_at", "ENVELOPE_INVALID_LIFETIME")
+        }
+        if (envelope.expiresAt < now - skew) {
+            return deny(envelope, "envelope has expired", "ENVELOPE_EXPIRED")
         }
 
-        // 3. Workflow hash check
-        val expectedHash = computeWorkflowHash(
+        val expectedHash = EnvelopeCanonicalizer.computeWorkflowHash(
+            envelopeVersion = envelope.envelopeVersion,
             callerId = envelope.callerId,
             capability = envelope.capability,
             params = envelope.params,
             nonce = envelope.nonce,
-            expiresAt = envelope.expiresAt
+            issuedAt = envelope.issuedAt,
+            expiresAt = envelope.expiresAt,
+            scope = envelope.scope
+        )
+        if (envelope.workflowHash != expectedHash) {
+            return deny(envelope, "workflow_hash mismatch", "INVALID_WORKFLOW_HASH")
+        }
+
+        val publicKey = keyRegistry.publicKeyFor(envelope.callerId)
+            ?: return deny(envelope, "caller_id is not a registered identity", "UNKNOWN_CALLER")
+
+        val signatureBytes = try {
+            Base64Codec.decode(envelope.signature)
+        } catch (e: Exception) {
+            return deny(envelope, "signature is not valid Base64: ${e.message}", "MALFORMED_SIGNATURE")
+        }
+
+        val canonicalBytes = EnvelopeCanonicalizer.canonicalBytes(
+            envelopeVersion = envelope.envelopeVersion,
+            callerId = envelope.callerId,
+            capability = envelope.capability,
+            params = envelope.params,
+            nonce = envelope.nonce,
+            issuedAt = envelope.issuedAt,
+            expiresAt = envelope.expiresAt,
+            scope = envelope.scope
         )
 
-        if (envelope.workflowHash != expectedHash) {
-            Logger.w(TAG, "Envelope verification FAILED: workflow_hash mismatch (expected: $expectedHash, got: ${envelope.workflowHash})")
-            return Result.Error("Invalid workflow hash", errorCode = "INVALID_WORKFLOW_HASH")
-        }
-
-        // 4. Cryptographic signature check (Prototype verification)
-        if (envelope.signature.isBlank()) {
-            Logger.w(TAG, "Envelope verification FAILED: signature is blank")
-            return Result.Error("Missing signature", errorCode = "MISSING_SIGNATURE")
-        }
-
-        // Prototype verification rule: accepts signatures starting with "sig_" or standard format
-        if (!verifySignature(envelope.callerId, envelope.workflowHash, envelope.signature)) {
-            Logger.w(TAG, "Envelope verification FAILED: signature verification failed for caller '${envelope.callerId}'")
-            return Result.Error("Invalid signature", errorCode = "INVALID_SIGNATURE")
+        if (!signatureProvider.verify(publicKey, canonicalBytes, signatureBytes)) {
+            return deny(envelope, "cryptographic signature verification failed", "INVALID_SIGNATURE")
         }
 
         Logger.i(TAG, "Envelope verification SUCCESS for caller '${envelope.callerId}'")
         return Result.Success(Unit)
     }
 
-    /**
-     * Computes canonical SHA-256 workflow hash over envelope components.
-     */
-    fun computeWorkflowHash(
-        callerId: String,
-        capability: String,
-        params: Map<String, Any?>,
-        nonce: String,
-        expiresAt: Long
-    ): String {
-        val canonicalParams = params.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
-        val canonicalPayload = "$callerId|$capability|$canonicalParams|$nonce|$expiresAt"
-
-        val digest = MessageDigest.getInstance("SHA-256")
-        val hashBytes = digest.digest(canonicalPayload.toByteArray(StandardCharsets.UTF_8))
-        return hashBytes.joinToString("") { "%02x".format(it) }
-    }
-
-    private fun verifySignature(callerId: String, hash: String, signature: String): Boolean {
-        // In prototype Phase 0.5, valid signatures are non-empty and prefixed with "sig_"
-        // Phase 1 introduces canonical Ed25519 / ECDSA signature verification against registered keys.
-        return signature.startsWith("sig_") || signature.length >= 16
+    private fun deny(envelope: RequestEnvelope, reason: String, code: String): Result.Error {
+        Logger.w(TAG, "Envelope verification FAILED for caller '${envelope.callerId}': $reason")
+        return Result.Error(reason, errorCode = code)
     }
 }

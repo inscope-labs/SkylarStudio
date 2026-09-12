@@ -5,34 +5,40 @@ import com.inscopelabs.abx.skylar.audit.AuditLogger
 import com.inscopelabs.abx.skylar.audit.AuditRecord
 import com.inscopelabs.abx.skylar.common.Result
 import com.inscopelabs.abx.skylar.config.SkylarConfig
+import com.inscopelabs.abx.skylar.crypto.KeyRegistry
 import com.inscopelabs.abx.skylar.diagnostics.Logger
 import com.inscopelabs.abx.skylar.ipc.TargetDispatcher
 import com.inscopelabs.abx.skylar.mesh.MeshNodeManager
 import com.inscopelabs.abx.skylar.policy.AuthorizationMatrix
 import com.inscopelabs.abx.skylar.policy.PolicyLoader
 import com.inscopelabs.abx.skylar.policy.RoutingTable
+import com.inscopelabs.abx.skylar.policy.SignedPolicyArtifact
 
 /**
- * The single Policy Enforcement Point for the Skylar Context Gateway.
+ * The single Policy Enforcement Point for the Skylar Context Gateway:
+ * verify -> replay-check -> authorize -> route -> dispatch -> audit.
  *
- * Security Contract:
- * - Executes the strictly ordered pipeline:
- *   1. Envelope Verification (timestamps, workflow hash, signature)
- *   2. Replay & Expiry Protection (atomic NonceCache lookup & record)
- *   3. Authorization Matrix Check (caller_id -> {capability: scope}, default-deny)
- *   4. Routing Table Resolution (capability -> target, default-deny)
- *   5. Scoped Fail-Closed Dispatch (TargetDispatcher)
- *   6. Append-Only Audit Logging (AuditLogger)
- * - Never executes business logic directly; always delegates to targets.
+ * Two behavioral changes relative to the prior prototype matter here:
+ *
+ * 1. [EnvelopeVerifier] now requires a real [KeyRegistry] and performs
+ *    real signature verification, not a string-length check.
+ * 2. [initialize] fails closed to [AuthorizationMatrix.EMPTY] /
+ *    [RoutingTable.EMPTY] whenever no *verified* signed policy artefact
+ *    is supplied, instead of silently loading a hardcoded fixture and
+ *    reporting success. Until Phase 1's actual policy-signing pipeline
+ *    exists and produces real artefacts, starting in the fail-closed
+ *    (all-deny) state is the CORRECT behavior, not a bug to work around.
  */
 class SkylarCore(
     private val context: Context,
+    val keyRegistry: KeyRegistry,
     val config: SkylarConfig = SkylarConfig.DEFAULT,
-    val verifier: EnvelopeVerifier = EnvelopeVerifier(config),
-    val nonceCache: NonceCache = NonceCache(context, config),
+    val verifier: EnvelopeVerifier = EnvelopeVerifier(keyRegistry, config),
+    val nonceCache: NonceCache = PersistentNonceCache(context, config),
     val auditLogger: AuditLogger = AuditLogger(context, config),
     val dispatcher: TargetDispatcher = TargetDispatcher(context),
-    val meshManager: MeshNodeManager = MeshNodeManager(context, config)
+    val meshManager: MeshNodeManager = MeshNodeManager(context, config),
+    private val policyLoader: PolicyLoader = PolicyLoader(context, keyRegistry, config)
 ) {
     companion object {
         private const val TAG = "SkylarCore"
@@ -44,149 +50,119 @@ class SkylarCore(
     private var isInitialized = false
 
     /**
-     * Initializes Skylar Core policies and subsystem state.
+     * Initializes with an explicitly-supplied, already-signed policy
+     * pair. If either artefact is missing or fails verification, this
+     * fails closed to EMPTY for BOTH tables — a trustworthy matrix
+     * paired with an untrustworthy routing table (or vice versa) is not
+     * a safe half-initialized state to run in.
      */
-    fun initialize(): Result<Unit> {
+    fun initialize(
+        authorityArtifact: SignedPolicyArtifact? = null,
+        routingArtifact: SignedPolicyArtifact? = null,
+        parseAuthMatrix: (String) -> Map<String, Map<String, Set<String>>> = { emptyMap() },
+        parseRoutingTable: (String) -> Map<String, String> = { emptyMap() }
+    ): Result<Unit> {
         synchronized(lock) {
-            Logger.i(TAG, "Initializing Skylar Core policy engine...")
-            val loader = PolicyLoader(context, config)
+            if (authorityArtifact == null || routingArtifact == null) {
+                Logger.w(TAG, "No signed policy artefacts supplied — initializing fail-closed (default-deny)")
+                authMatrix = AuthorizationMatrix.EMPTY
+                routingTable = RoutingTable.EMPTY
+                isInitialized = true // initialized INTO a safe, fully-deny state — not an error state
+                return Result.Success(Unit)
+            }
 
-            val matrixResult = loader.loadAuthorizationMatrix()
-            val routingResult = loader.loadRoutingTable()
+            val matrixResult = policyLoader.loadAuthorizationMatrixFromArtifact(authorityArtifact, parseAuthMatrix)
+            val routingResult = policyLoader.loadRoutingTableFromArtifact(routingArtifact, parseRoutingTable)
 
-            if (matrixResult.isError || routingResult.isError) {
-                Logger.e(TAG, "Failed to load signed policy artefacts. Core failing closed.")
-                isInitialized = false
-                return Result.Error("Policy initialization failed", errorCode = "INIT_FAILED")
+            if (matrixResult is Result.Error || routingResult is Result.Error) {
+                Logger.e(TAG, "Signed policy artefact verification failed — failing closed to EMPTY")
+                authMatrix = AuthorizationMatrix.EMPTY
+                routingTable = RoutingTable.EMPTY
+                isInitialized = true
+                return Result.Error("Policy verification failed", errorCode = "POLICY_VERIFICATION_FAILED")
             }
 
             authMatrix = matrixResult.getOrNull() ?: AuthorizationMatrix.EMPTY
             routingTable = routingResult.getOrNull() ?: RoutingTable.EMPTY
             isInitialized = true
-
-            Logger.i(TAG, "Skylar Core initialized successfully with ${authMatrix.callerCount()} callers and ${routingTable.routeCount()} routes")
+            Logger.i(TAG, "Skylar Core initialized with verified policy: ${authMatrix.callerCount()} callers, ${routingTable.routeCount()} routes")
             return Result.Success(Unit)
         }
     }
 
-    /**
-     * Processes an incoming signed request envelope through the enforcement pipeline.
-     */
     fun processEnvelope(envelope: RequestEnvelope): Result<Map<String, Any?>> {
         val startTime = System.currentTimeMillis()
         Logger.i(TAG, "--> Pipeline START: caller='${envelope.callerId}', capability='${envelope.capability}', nonce='${envelope.nonce}'")
 
-        // 1. Envelope Verification (timestamps, canonical workflow hash, signature)
         val verifyResult = verifier.verify(envelope)
         if (verifyResult is Result.Error) {
-            recordAudit(
-                envelope = envelope,
-                decision = AuditRecord.Decision.DENY,
-                reason = "Envelope verification failed: ${verifyResult.message}",
-                startTime = startTime
-            )
-            return verifyResult
+            return deny(envelope, "Envelope verification failed: ${verifyResult.message}", startTime, "ENVELOPE_INVALID")
         }
 
-        // 2. Replay Protection (cheapest persistent check)
         val isNewNonce = nonceCache.checkAndRecord(envelope.callerId, envelope.nonce, envelope.expiresAt)
         if (!isNewNonce) {
-            val reason = "Replay detected for caller '${envelope.callerId}' with nonce '${envelope.nonce}'"
-            Logger.w(TAG, reason)
-            recordAudit(
-                envelope = envelope,
-                decision = AuditRecord.Decision.DENY,
-                reason = reason,
-                startTime = startTime
-            )
-            return Result.Error(reason, errorCode = "REPLAY_DETECTED")
+            return deny(envelope, "Replay detected for nonce '${envelope.nonce}'", startTime, "REPLAY_DETECTED")
         }
 
-        // 3. Authorization Matrix Check (default-deny)
         val isAuthorized = synchronized(lock) {
             authMatrix.isAuthorized(envelope.callerId, envelope.capability, envelope.scope)
         }
         if (!isAuthorized) {
-            val reason = "Caller '${envelope.callerId}' not authorized for capability '${envelope.capability}'"
-            Logger.w(TAG, reason)
-            recordAudit(
-                envelope = envelope,
-                decision = AuditRecord.Decision.DENY,
-                reason = reason,
-                startTime = startTime
-            )
-            return Result.Error(reason, errorCode = "UNAUTHORIZED")
+            return deny(envelope, "Caller '${envelope.callerId}' not authorized for '${envelope.capability}'", startTime, "UNAUTHORIZED")
         }
 
-        // 4. Routing Table Resolution (default-deny)
-        val target = synchronized(lock) {
-            routingTable.resolveTarget(envelope.capability)
-        }
+        val target = synchronized(lock) { routingTable.resolveTarget(envelope.capability) }
         if (target == null) {
-            val reason = "No routing target configured for capability '${envelope.capability}'"
-            Logger.w(TAG, reason)
-            recordAudit(
-                envelope = envelope,
-                decision = AuditRecord.Decision.DENY,
-                reason = reason,
-                startTime = startTime
-            )
-            return Result.Error(reason, errorCode = "UNMAPPED_CAPABILITY")
+            return deny(envelope, "No routing target for capability '${envelope.capability}'", startTime, "UNMAPPED_CAPABILITY")
         }
 
-        // 5. Target Dispatch
         Logger.i(TAG, "Dispatching to target '$target' for capability '${envelope.capability}'")
         val dispatchResult = dispatcher.dispatch(target, envelope.capability, envelope.params)
-
         val duration = System.currentTimeMillis() - startTime
-        if (dispatchResult is Result.Success) {
-            recordAudit(
-                envelope = envelope,
-                decision = AuditRecord.Decision.ALLOW,
-                reason = "Successfully authorized and dispatched to $target",
-                target = target,
-                startTime = startTime
-            )
-            Logger.i(TAG, "<-- Pipeline SUCCESS: capability='${envelope.capability}' routed to '$target' in ${duration}ms")
-        } else {
-            val error = dispatchResult as Result.Error
-            recordAudit(
-                envelope = envelope,
-                decision = AuditRecord.Decision.ALLOW,
-                reason = "Authorized to $target but target execution failed: ${error.message}",
-                target = target,
-                startTime = startTime
-            )
-            Logger.e(TAG, "<-- Pipeline ERROR: target '$target' execution failed in ${duration}ms: ${error.message}")
-        }
 
+        // decision=ALLOW here reflects that the request WAS authorized and
+        // dispatched — a downstream execution failure at the target is a
+        // separate concern captured in `reason`, not a change to this
+        // gateway's own allow/deny verdict.
+        val reason = if (dispatchResult is Result.Success) {
+            "Authorized and dispatched to $target"
+        } else {
+            "Authorized to $target but execution failed: ${(dispatchResult as Result.Error).message}"
+        }
+        auditLogger.record(
+            AuditRecord(
+                callerId = envelope.callerId,
+                capability = envelope.capability,
+                decision = AuditRecord.Decision.ALLOW,
+                reason = reason,
+                nonce = envelope.nonce,
+                envelopeHash = envelope.workflowHash,
+                target = target,
+                executionTimeMs = duration,
+                policyVersion = synchronized(lock) { authMatrix.version }
+            )
+        )
+        Logger.i(TAG, "<-- Pipeline END: capability='${envelope.capability}' target='$target' in ${duration}ms")
         return dispatchResult
     }
 
-    private fun recordAudit(
-        envelope: RequestEnvelope,
-        decision: AuditRecord.Decision,
-        reason: String,
-        target: String? = null,
-        startTime: Long
-    ) {
-        val duration = System.currentTimeMillis() - startTime
-        val record = AuditRecord(
-            callerId = envelope.callerId,
-            capability = envelope.capability,
-            decision = decision,
-            reason = reason,
-            nonce = envelope.nonce,
-            envelopeHash = envelope.workflowHash,
-            target = target,
-            executionTimeMs = duration
+    private fun deny(envelope: RequestEnvelope, reason: String, startTime: Long, code: String): Result.Error {
+        Logger.w(TAG, reason)
+        auditLogger.record(
+            AuditRecord(
+                callerId = envelope.callerId,
+                capability = envelope.capability,
+                decision = AuditRecord.Decision.DENY,
+                reason = reason,
+                nonce = envelope.nonce,
+                envelopeHash = envelope.workflowHash,
+                executionTimeMs = System.currentTimeMillis() - startTime,
+                policyVersion = synchronized(lock) { authMatrix.version }
+            )
         )
-        auditLogger.record(record)
+        return Result.Error(reason, errorCode = code)
     }
 
-    /**
-     * Hot-reloads policy artefacts.
-     */
     fun reloadPolicy(newMatrix: AuthorizationMatrix, newRoutingTable: RoutingTable) {
         synchronized(lock) {
             authMatrix = newMatrix
