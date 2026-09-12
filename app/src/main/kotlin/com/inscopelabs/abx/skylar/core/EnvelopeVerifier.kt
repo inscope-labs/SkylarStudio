@@ -38,6 +38,10 @@ class EnvelopeVerifier(
     fun verify(envelope: RequestEnvelope): Result<Unit> {
         Logger.d(TAG, "Verifying envelope: caller=${envelope.callerId}, capability=${envelope.capability}, nonce=${envelope.nonce}")
 
+        if (envelope.envelopeVersion != RequestEnvelope.CURRENT_ENVELOPE_VERSION) {
+            return deny(envelope, "Unsupported envelope version: ${envelope.envelopeVersion}", "UNSUPPORTED_ENVELOPE_VERSION")
+        }
+
         if (envelope.callerId.isBlank()) return deny(envelope, "Missing caller_id", "MISSING_CALLER_ID")
         if (envelope.capability.isBlank()) return deny(envelope, "Missing capability", "MISSING_CAPABILITY")
         if (envelope.nonce.isBlank()) return deny(envelope, "Missing nonce", "MISSING_NONCE")

@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Phase 4: Platform-level access control for Capability Targets -->
+    <permission
+        android:name="com.inscopelabs.abx.skylar.permission.DISPATCH_CAPABILITY"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.inscopelabs.abx.skylar.permission.DISPATCH_CAPABILITY" />
+
     <application
         android:name=".SkylarApplication"
         android:allowBackup="true"
@@ -38,6 +44,25 @@
             android:label="@string/error_user_title"
             android:process=":crash"
             android:theme="@style/Theme.Skylar" />
+
+        <!-- Phase 4: Protected Capability Target AIDL Services -->
+        <service
+            android:name=".ipc.target.StarlightTargetService"
+            android:exported="true"
+            android:permission="com.inscopelabs.abx.skylar.permission.DISPATCH_CAPABILITY">
+            <intent-filter>
+                <action android:name="com.inscopelabs.abx.skylar.action.BIND_STARLIGHT" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".ipc.target.SfmTargetService"
+            android:exported="true"
+            android:permission="com.inscopelabs.abx.skylar.permission.DISPATCH_CAPABILITY">
+            <intent-filter>
+                <action android:name="com.inscopelabs.abx.skylar.action.BIND_SFM" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

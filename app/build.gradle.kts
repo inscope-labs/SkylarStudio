@@ -50,6 +50,7 @@ android {
   }
   buildFeatures {
     buildConfig = true
+    aidl = true
   }
   testOptions {
     unitTests {
@@ -76,6 +77,8 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.activity)
   testImplementation(libs.junit)
+  testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.core)
 
   // Phase 2 (libtailscale critical-path spike): MeshNode's StateFlow surface.
   implementation(libs.kotlinx.coroutines.core)

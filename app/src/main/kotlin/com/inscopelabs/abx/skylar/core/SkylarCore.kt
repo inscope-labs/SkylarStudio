@@ -91,6 +91,20 @@ class SkylarCore(
         }
     }
 
+    /**
+     * Initializes Skylar Core directly with pre-verified [AuthorizationMatrix] and [RoutingTable].
+     * Primarily used for in-process testing and internal test harnesses.
+     */
+    fun initialize(matrix: AuthorizationMatrix, routingTable: RoutingTable): Result<Unit> {
+        synchronized(lock) {
+            authMatrix = matrix
+            this.routingTable = routingTable
+            isInitialized = true
+            Logger.i(TAG, "Skylar Core initialized directly: ${matrix.callerCount()} callers, ${routingTable.routeCount()} routes")
+            return Result.Success(Unit)
+        }
+    }
+
     fun processEnvelope(envelope: RequestEnvelope): Result<Map<String, Any?>> {
         val startTime = System.currentTimeMillis()
         Logger.i(TAG, "--> Pipeline START: caller='${envelope.callerId}', capability='${envelope.capability}', nonce='${envelope.nonce}'")
