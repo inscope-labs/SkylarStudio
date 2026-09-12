@@ -11,8 +11,10 @@ android {
     applicationId = "com.inscopelabs.abx.skylar"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    val propVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull()
+    val propVersionName = project.findProperty("versionName")?.toString()
+    versionCode = propVersionCode ?: 1
+    versionName = propVersionName ?: "0.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

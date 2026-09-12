@@ -1,0 +1,84 @@
+name: Build Skylar Debug APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test Skylar Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Verify Toolchain
+        run: |
+          java -version
+          gradle --version
+
+      - name: Prepare environment configuration
+        run: |
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Read Version Configuration
+        id: version
+        run: |
+          VERSION_CODE=$(grep '^versionCode=' version.properties | cut -d= -f2 || echo "1")
+          BASE_VERSION_NAME=$(grep '^versionName=' version.properties | cut -d= -f2 || echo "0.1.0")
+          DEBUG_CODE=$(grep '^debugCode=' version.properties | cut -d= -f2 || echo "0001")
+          FULL_DEBUG_VERSION="${BASE_VERSION_NAME}-debug.${DEBUG_CODE}"
+          echo "versionCode=${VERSION_CODE}" >> $GITHUB_OUTPUT
+          echo "versionName=${FULL_DEBUG_VERSION}" >> $GITHUB_OUTPUT
+          echo "Building Skylar Debug APK with versionCode=${VERSION_CODE}, versionName=${FULL_DEBUG_VERSION}"
+
+      - name: Ensure debug keystore exists
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+            echo "Restored debug.keystore from base64"
+          elif [ ! -f debug.keystore ]; then
+            keytool -genkeypair \
+              -keystore debug.keystore \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+
+            echo "Generated debug.keystore"
+          else
+            echo "Using existing debug.keystore"
+          fi
+
+      - name: Run Unit Tests
+        run: gradle test -PversionCode=${{ steps.version.outputs.versionCode }} -PversionName="${{ steps.version.outputs.versionName }}"
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug -PversionCode=${{ steps.version.outputs.versionCode }} -PversionName="${{ steps.version.outputs.versionName }}"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skylar-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
