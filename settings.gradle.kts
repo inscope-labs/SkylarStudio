@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "Skylar"
 
 include(":app")
+include(":libs:skylar-envelope")

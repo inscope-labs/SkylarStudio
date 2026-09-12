@@ -1,0 +1,129 @@
+# Skylar Shared Envelope Library — Cross-Repository Integration Note
+
+**Phase:** 1 (Shared Envelope & Policy Library)  
+**Artifact:** `libs/skylar-envelope` (`com.inscopelabs.abx.skylar.envelope`)  
+**Specification Reference:** `docs/skylar-context-gateway-phased-development-plan.md` § Phase 1
+
+---
+
+## 1. Overview & Purpose
+
+The `skylar-envelope` library provides the single canonical implementation of the signed request envelope, deterministic canonicalization, workflow hash calculation, cryptographic verification (ECDSA P-256/SHA-256), and signed policy containers.
+
+External consumers — including **Starlight**, **SFM** (`abx-sfm-1`), **xtools**, and the **mailbox test endpoint** — must depend on this shared library rather than re-implementing serialization or signature math. This guarantees cross-UID protocol uniformity and zero serialization drift.
+
+---
+
+## 2. Dependency Configuration
+
+### For Android Consumers (Gradle Kotlin DSL)
+
+When consumed within a multi-module workspace or via internal AAR/Maven repository:
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("com.inscopelabs.abx.skylar:skylar-envelope:0.1.0")
+    // or as a local project dependency:
+    // implementation(project(":libs:skylar-envelope"))
+}
+```
+
+---
+
+## 3. Envelope Specification & Wire Format
+
+- **Current Envelope Version:** `1` (`RequestEnvelope.CURRENT_ENVELOPE_VERSION`)
+- **Signature Algorithm:** `SHA256withECDSA` (ECDSA over NIST P-256 / secp256r1 curve, SHA-256 digest)
+- **Signature & Key Encoding:** Standard RFC 4648 Base64 (PKCS#8 for private keys, X.509 for public keys)
+- **Workflow Hash:** SHA-256 hex digest over canonicalized byte sequence:
+  ```
+  v=<version>&caller=<caller_id>&capability=<capability>&scope=<scope>&params=<params>&nonce=<nonce>&issued_at=<issued_at>&expires_at=<expires_at>
+  ```
+  - Delimiters `&`, `,`, `:`, `\` are escaped with `\`.
+  - Nested maps are sorted lexicographically by string key.
+
+---
+
+## 4. Integration Recipes
+
+### 4.1 Constructing and Signing a Request Envelope (Client / Caller)
+
+Callers (such as Starlight or SFM) use `EnvelopeBuilder` to produce a signed envelope:
+
+```kotlin
+import com.inscopelabs.abx.skylar.envelope.EnvelopeBuilder
+import com.inscopelabs.abx.skylar.envelope.RequestEnvelope
+
+val clientPrivateKeyBytes: ByteArray = // loaded from secure credential store
+
+val envelope: RequestEnvelope = EnvelopeBuilder()
+    .callerId("starlight.service")
+    .capability("starlight.inference.execute")
+    .param("model", "gemini-flash")
+    .param("prompt", "Analyze system context")
+    .scope("execute")
+    .sign(clientPrivateKeyBytes)
+```
+
+### 4.2 Verifying an Incoming Envelope (Skylar Core / Policy Enforcement Point)
+
+Skylar Core verifies the envelope against registered public keys and nonce replay cache:
+
+```kotlin
+import com.inscopelabs.abx.skylar.envelope.EnvelopeVerifier
+import com.inscopelabs.abx.skylar.envelope.EnvelopeVerificationResult
+import com.inscopelabs.abx.skylar.envelope.crypto.InMemoryKeyRegistry
+import com.inscopelabs.abx.skylar.envelope.nonce.InMemoryNonceCache
+
+val keyRegistry = InMemoryKeyRegistry().apply {
+    register("starlight.service", starlightPublicKeyBytes)
+}
+val nonceCache = InMemoryNonceCache()
+val verifier = EnvelopeVerifier(
+    keyRegistry = keyRegistry,
+    nonceCache = nonceCache,
+    clockSkewToleranceMs = 30_000L
+)
+
+val result: EnvelopeVerificationResult = verifier.verify(envelope)
+when (result) {
+    is EnvelopeVerificationResult.Success -> {
+        // Proceed to authorization matrix and routing
+    }
+    is EnvelopeVerificationResult.Failure -> {
+        // Fail closed immediately
+        val reason = result.reason
+        val code = result.errorCode
+    }
+}
+```
+
+### 4.3 Reading & Verifying Signed Policy Artefacts
+
+Policy files (Authorization Matrix and Routing Table) are distributed as signed containers:
+
+```kotlin
+import com.inscopelabs.abx.skylar.envelope.policy.PolicyArtifactReader
+import com.inscopelabs.abx.skylar.envelope.policy.SignedPolicyArtifact
+
+val reader = PolicyArtifactReader(keyRegistry)
+val matrixResult = reader.readAuthorizationMatrix(artifact) { canonicalPayload ->
+    // Parse canonical payload into caller -> capability -> set of scopes
+    parseMatrix(canonicalPayload)
+}
+
+if (matrixResult.isSuccess) {
+    val authMatrix = matrixResult.getOrNull()!!
+    val authorized = authMatrix.isAuthorized(callerId, capability, requiredScope)
+}
+```
+
+---
+
+## 5. Security & Fail-Closed Invariants
+
+1. **Default-Deny:** Unregistered callers, unknown capabilities, or unverified signatures are strictly rejected.
+2. **Immutability:** Any tampering with `caller_id`, `capability`, `params`, `nonce`, `issued_at`, `expires_at`, `scope`, or `workflow_hash` invalidates the signature and causes verification failure.
+3. **No Fallback:** If policy verification fails, Skylar Core defaults to empty matrices where all requests are denied.
+4. **Key Isolation:** Test keys generated by `tools/keygen/generate-test-keys.sh` are strictly for local development and unit testing. Production Issuer keys are managed via the dedicated secret store.

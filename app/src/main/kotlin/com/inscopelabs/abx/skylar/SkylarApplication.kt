@@ -5,6 +5,8 @@ import com.inscopelabs.abx.skylar.core.SkylarCore
 import com.inscopelabs.abx.skylar.crypto.InMemoryKeyRegistry
 import com.inscopelabs.abx.skylar.diagnostics.GlobalExceptionHandler
 import com.inscopelabs.abx.skylar.diagnostics.Logger
+import com.inscopelabs.abx.skylar.envelope.EnvelopeLog
+import com.inscopelabs.abx.skylar.envelope.EnvelopeLogger
 
 /**
  * Android Application entry point for Skylar Context Gateway.
@@ -33,6 +35,7 @@ class SkylarApplication : Application() {
         // 1. Initialize diagnostic logger and crash reporting
         Logger.i(TAG, "SkylarApplication onCreate starting...")
         initCrashHandling()
+        initEnvelopeLogging()
 
         // 2. Initialize Skylar Core and policy engines
         //
@@ -62,6 +65,17 @@ class SkylarApplication : Application() {
             Logger.d(TAG, "GlobalExceptionHandler registered as default uncaught exception handler")
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to register GlobalExceptionHandler", e)
+        }
+    }
+
+    private fun initEnvelopeLogging() {
+        EnvelopeLog.delegate = EnvelopeLogger { level, tag, message, throwable ->
+            when (level) {
+                EnvelopeLogger.Level.DEBUG -> Logger.d(tag, message)
+                EnvelopeLogger.Level.INFO -> Logger.i(tag, message)
+                EnvelopeLogger.Level.WARN -> if (throwable != null) Logger.e(tag, message, throwable) else Logger.w(tag, message)
+                EnvelopeLogger.Level.ERROR -> if (throwable != null) Logger.e(tag, message, throwable) else Logger.e(tag, message)
+            }
         }
     }
 }
