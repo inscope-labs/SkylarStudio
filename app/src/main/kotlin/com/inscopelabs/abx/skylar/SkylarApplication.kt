@@ -2,6 +2,7 @@ package com.inscopelabs.abx.skylar
 
 import android.app.Application
 import com.inscopelabs.abx.skylar.core.SkylarCore
+import com.inscopelabs.abx.skylar.crypto.InMemoryKeyRegistry
 import com.inscopelabs.abx.skylar.diagnostics.GlobalExceptionHandler
 import com.inscopelabs.abx.skylar.diagnostics.Logger
 
@@ -34,7 +35,15 @@ class SkylarApplication : Application() {
         initCrashHandling()
 
         // 2. Initialize Skylar Core and policy engines
-        skylarCore = SkylarCore(applicationContext)
+        //
+        // KeyRegistry: intentionally an empty InMemoryKeyRegistry. Real
+        // caller public-key registration/rotation is Phase 6's concern
+        // (request-signing credential bootstrap) and doesn't exist yet.
+        // An empty registry means EnvelopeVerifier rejects every caller
+        // as unregistered — that's the correct default-deny state for a
+        // build with no real key provisioning wired in, not a bug to
+        // route around here.
+        skylarCore = SkylarCore(applicationContext, keyRegistry = InMemoryKeyRegistry())
         val initResult = skylarCore.initialize()
 
         if (initResult.isSuccess) {
