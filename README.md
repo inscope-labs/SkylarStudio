@@ -34,7 +34,9 @@ app/src/main/kotlin/com/inscopelabs/abx/skylar/
 │   ├── SfmClient.kt             # Storage vault execution client adapter
 │   └── XtoolsBridge.kt          # System diagnostics / tools bridge adapter
 ├── mesh/
-│   ├── MeshNodeManager.kt       # Embedded userspace mesh node lifecycle (Lane A)
+│   ├── MeshNode.kt              # Userspace Tailscale mesh node contract (Lane A)
+│   ├── MeshNodeState.kt         # Sealed lifecycle state model
+│   ├── TsnetMeshNode.kt         # tsnet engine binding adapter (fail-closed spike scaffold)
 │   └── TransportCredential.kt   # Transport reachability credential (non-authorizing)
 ├── audit/
 │   ├── AuditRecord.kt           # Immutable audit record definition

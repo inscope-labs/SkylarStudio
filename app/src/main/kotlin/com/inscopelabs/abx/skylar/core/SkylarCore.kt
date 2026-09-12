@@ -8,7 +8,8 @@ import com.inscopelabs.abx.skylar.config.SkylarConfig
 import com.inscopelabs.abx.skylar.crypto.KeyRegistry
 import com.inscopelabs.abx.skylar.diagnostics.Logger
 import com.inscopelabs.abx.skylar.ipc.TargetDispatcher
-import com.inscopelabs.abx.skylar.mesh.MeshNodeManager
+import com.inscopelabs.abx.skylar.mesh.MeshNode
+import com.inscopelabs.abx.skylar.mesh.TsnetMeshNode
 import com.inscopelabs.abx.skylar.policy.AuthorizationMatrix
 import com.inscopelabs.abx.skylar.policy.PolicyLoader
 import com.inscopelabs.abx.skylar.policy.RoutingTable
@@ -37,7 +38,7 @@ class SkylarCore(
     val nonceCache: NonceCache = PersistentNonceCache(context, config),
     val auditLogger: AuditLogger = AuditLogger(context, config),
     val dispatcher: TargetDispatcher = TargetDispatcher(context),
-    val meshManager: MeshNodeManager = MeshNodeManager(context, config),
+    val meshNode: MeshNode = TsnetMeshNode(),
     private val policyLoader: PolicyLoader = PolicyLoader(context, keyRegistry, config)
 ) {
     companion object {
