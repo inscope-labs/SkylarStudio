@@ -73,4 +73,15 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.activity)
   testImplementation(libs.junit)
+
+  // Phase 2 (libtailscale critical-path spike): MeshNode's StateFlow surface.
+  implementation(libs.kotlinx.coroutines.core)
+  implementation(libs.kotlinx.coroutines.android)
+
+  // TODO(phase-2): once `gomobile bind` produces the tsnet Android artifact
+  // (Phase 2 §4 work item 1-2), add it here, e.g.:
+  //   implementation(files("libs/tsnet-android.aar"))
+  // or, if published to a registry:
+  //   implementation("com.tailscale:tsnet-android:<version>")
+  // Not added yet — no bound artifact exists in this repo as of this scaffold.
 }
