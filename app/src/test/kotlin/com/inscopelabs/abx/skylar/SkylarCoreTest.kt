@@ -1,15 +1,14 @@
 package com.inscopelabs.abx.skylar
 
-import com.inscopelabs.abx.skylar.config.SkylarConfig
-import com.inscopelabs.abx.skylar.core.EnvelopeCanonicalizer
-import com.inscopelabs.abx.skylar.core.EnvelopeVerifier
-import com.inscopelabs.abx.skylar.core.RequestEnvelope
-import com.inscopelabs.abx.skylar.crypto.Base64Codec
-import com.inscopelabs.abx.skylar.crypto.EcdsaP256SignatureProvider
-import com.inscopelabs.abx.skylar.crypto.InMemoryKeyRegistry
+import com.inscopelabs.abx.skylar.envelope.EnvelopeCanonicalizer
+import com.inscopelabs.abx.skylar.envelope.EnvelopeVerifier
+import com.inscopelabs.abx.skylar.envelope.RequestEnvelope
+import com.inscopelabs.abx.skylar.envelope.crypto.Base64Codec
+import com.inscopelabs.abx.skylar.envelope.crypto.EcdsaP256SignatureProvider
+import com.inscopelabs.abx.skylar.envelope.crypto.InMemoryKeyRegistry
+import com.inscopelabs.abx.skylar.envelope.policy.AuthorizationMatrix
+import com.inscopelabs.abx.skylar.envelope.policy.RoutingTable
 import com.inscopelabs.abx.skylar.mesh.TransportCredential
-import com.inscopelabs.abx.skylar.policy.AuthorizationMatrix
-import com.inscopelabs.abx.skylar.policy.RoutingTable
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -20,21 +19,14 @@ import java.security.PrivateKey
 import java.security.spec.ECGenParameterSpec
 
 /**
- * Rewritten against the real [EnvelopeVerifier]/[EcdsaP256SignatureProvider]
- * (see agent-reports/2026-09-12T07-30-00Z-guiding-prototype-security-contract-core.md).
- *
- * The prior version's envelope tests used a fake fixed signature string
- * ("sig_valid_test_signature_123") that the old fail-open verifier
- * accepted unconditionally. That string is not a valid ECDSA signature
- * over anything, so it can no longer pass — correctly. These tests use
- * real generated P-256 keypairs and real signatures instead, and add
- * cases the old suite had no way to express (tampering, impersonation)
- * since its verifier couldn't actually distinguish a real signature
- * from a fake one.
+ * Unit tests for the canonical `libs/skylar-envelope` primitives, from
+ * the app module's perspective (real EC keypairs and real signatures —
+ * not the fixed fake string this suite originally used, which the old
+ * fail-open verifier accepted unconditionally and therefore tested
+ * nothing).
  */
 class SkylarCoreTest {
 
-    /** Generates a fresh P-256 keypair and registers the public half under [callerId]. */
     private fun registerTestCaller(registry: InMemoryKeyRegistry, callerId: String): PrivateKey {
         val keyPairGenerator = KeyPairGenerator.getInstance("EC")
         keyPairGenerator.initialize(ECGenParameterSpec("secp256r1"))
@@ -127,7 +119,7 @@ class SkylarCoreTest {
     fun testEnvelopeVerifier_ValidSignatureAccepted() {
         val registry = InMemoryKeyRegistry()
         val privateKey = registerTestCaller(registry, "caller.test")
-        val verifier = EnvelopeVerifier(registry, SkylarConfig.DEFAULT)
+        val verifier = EnvelopeVerifier(registry)
 
         val now = System.currentTimeMillis()
         val envelope = signEnvelope(
@@ -146,13 +138,9 @@ class SkylarCoreTest {
 
     @Test
     fun testEnvelopeVerifier_TamperedParamsRejected() {
-        // A signature only means something if changing the signed content
-        // invalidates it. The prior fail-open verifier had no way to fail
-        // this test, since it never actually checked the signature against
-        // the payload at all.
         val registry = InMemoryKeyRegistry()
         val privateKey = registerTestCaller(registry, "caller.test")
-        val verifier = EnvelopeVerifier(registry, SkylarConfig.DEFAULT)
+        val verifier = EnvelopeVerifier(registry)
 
         val now = System.currentTimeMillis()
         val signed = signEnvelope(
@@ -167,13 +155,13 @@ class SkylarCoreTest {
         val tampered = signed.copy(params = mapOf("query" to "admin_status"))
 
         val result = verifier.verify(tampered)
-        assertTrue(result.isError)
+        assertTrue(result.isFailure)
     }
 
     @Test
     fun testEnvelopeVerifier_UnregisteredCallerRejected() {
         val registry = InMemoryKeyRegistry() // caller.test is intentionally never registered
-        val verifier = EnvelopeVerifier(registry, SkylarConfig.DEFAULT)
+        val verifier = EnvelopeVerifier(registry)
 
         val keyPairGenerator = KeyPairGenerator.getInstance("EC")
         keyPairGenerator.initialize(ECGenParameterSpec("secp256r1"))
@@ -191,15 +179,11 @@ class SkylarCoreTest {
         )
 
         val result = verifier.verify(envelope)
-        assertTrue(result.isError)
+        assertTrue(result.isFailure)
     }
 
     @Test
     fun testEnvelopeVerifier_ImpersonationRejected() {
-        // Envelope claims to be caller.test (whose real public key IS
-        // registered) but is actually signed by a different private key.
-        // This is the case a signature scheme exists to prevent, and the
-        // old fail-open verifier had no way to catch it.
         val registry = InMemoryKeyRegistry()
         registerTestCaller(registry, "caller.test") // registers the REAL key; discard the private half
 
@@ -207,10 +191,10 @@ class SkylarCoreTest {
         keyPairGenerator.initialize(ECGenParameterSpec("secp256r1"))
         val attackerKeyPair = keyPairGenerator.generateKeyPair()
 
-        val verifier = EnvelopeVerifier(registry, SkylarConfig.DEFAULT)
+        val verifier = EnvelopeVerifier(registry)
         val now = System.currentTimeMillis()
         val envelope = signEnvelope(
-            privateKey = attackerKeyPair.private, // wrong key for the claimed caller_id
+            privateKey = attackerKeyPair.private,
             callerId = "caller.test",
             capability = "context.query",
             params = emptyMap(),
@@ -220,14 +204,14 @@ class SkylarCoreTest {
         )
 
         val result = verifier.verify(envelope)
-        assertTrue(result.isError)
+        assertTrue(result.isFailure)
     }
 
     @Test
     fun testEnvelopeVerifier_ExpiredEnvelopeRejected() {
         val registry = InMemoryKeyRegistry()
         val privateKey = registerTestCaller(registry, "caller.test")
-        val verifier = EnvelopeVerifier(registry, SkylarConfig(clockSkewToleranceMs = 1000L))
+        val verifier = EnvelopeVerifier(registry, clockSkewToleranceMs = 1000L)
 
         val now = System.currentTimeMillis()
         val expiredTime = now - 100_000L
@@ -242,7 +226,7 @@ class SkylarCoreTest {
         )
 
         val result = verifier.verify(envelope)
-        assertTrue(result.isError)
+        assertTrue(result.isFailure)
     }
 
     @Test

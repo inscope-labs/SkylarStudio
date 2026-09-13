@@ -10,11 +10,19 @@ import android.os.RemoteException
 import com.inscopelabs.abx.skylar.common.Result
 import com.inscopelabs.abx.skylar.diagnostics.Logger
 import com.inscopelabs.abx.skylar.ipc.aidl.IStarlightService
-import com.inscopelabs.abx.skylar.ipc.target.StarlightTargetService
+import com.inscopelabs.abx.skylar.ipc.target.mock.MockStarlightTargetService
 import org.json.JSONObject
 
 /**
  * IPC client for Starlight target (accessibility / execution agent).
+ *
+ * NOTE: currently binds to [MockStarlightTargetService], an in-process
+ * mock inside Skylar's own APK — not the real, separate Starlight app.
+ * See that class's KDoc and
+ * `docs/skylar-phase-04-real-integration-requirements.md`. This client
+ * class's own logic (bind/unbind/dispatch/error-handling) is written
+ * against the real target's intended shape and should not need to
+ * change once wired to the real app — only the bind target does.
  *
  * Security Contract:
  * - Invokes Starlight's protected AIDL interface [IStarlightService].
@@ -69,8 +77,8 @@ class StarlightClient(
     fun bindService(): Boolean {
         synchronized(lock) {
             if (isBound || customService != null) return true
-            val intent = Intent(StarlightTargetService.ACTION_BIND).apply {
-                setClass(context, StarlightTargetService::class.java)
+            val intent = Intent(MockStarlightTargetService.ACTION_BIND).apply {
+                setClass(context, MockStarlightTargetService::class.java)
             }
             return try {
                 val success = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)

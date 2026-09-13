@@ -10,11 +10,16 @@ import android.os.RemoteException
 import com.inscopelabs.abx.skylar.common.Result
 import com.inscopelabs.abx.skylar.diagnostics.Logger
 import com.inscopelabs.abx.skylar.ipc.aidl.ISfmService
-import com.inscopelabs.abx.skylar.ipc.target.SfmTargetService
+import com.inscopelabs.abx.skylar.ipc.target.mock.MockSfmTargetService
 import org.json.JSONObject
 
 /**
  * IPC client for SFM (System File Manager / storage vault) target.
+ *
+ * NOTE: currently binds to [MockSfmTargetService], an in-process mock
+ * inside Skylar's own APK — not the real, separate SFM (abx-sfm-1) app.
+ * See that class's KDoc and
+ * `docs/skylar-phase-04-real-integration-requirements.md`.
  *
  * Security Contract:
  * - Invokes SFM's protected AIDL interface [ISfmService].
@@ -69,8 +74,8 @@ class SfmClient(
     fun bindService(): Boolean {
         synchronized(lock) {
             if (isBound || customService != null) return true
-            val intent = Intent(SfmTargetService.ACTION_BIND).apply {
-                setClass(context, SfmTargetService::class.java)
+            val intent = Intent(MockSfmTargetService.ACTION_BIND).apply {
+                setClass(context, MockSfmTargetService::class.java)
             }
             return try {
                 val success = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)

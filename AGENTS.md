@@ -201,3 +201,85 @@ failing at. A restructuring task must therefore:
   <file> — <compliant / gaps found + which rule + issue file created>"
   line, so the audit trail is per-file, not a single pass/fail for the
   whole task.
+
+## 5. Scan Before You Build
+
+Before creating any new module, class, or file implementing a
+security-relevant primitive — cryptographic signing/verification,
+policy/authorization evaluation, key management, nonce/replay
+tracking, or an IPC/AIDL target surface — search the existing codebase
+for something that already implements the same concept. This applies
+whether the existing version lives in the same directory, a different
+module, or a different package.
+
+- If an existing implementation is found, extend or relocate it. Do
+  not build a second, parallel one — even if the existing one lives in
+  what seems like the "wrong" location for what you're doing.
+- If moving the existing implementation to a more correct location is
+  itself justified (e.g. promoting an app-local class into a shared
+  library module), do that move and update every consumer in the SAME
+  task. Never leave the old version in place "for now" alongside the
+  new one — two working implementations of the same security concern
+  is a drift risk regardless of which one is better written.
+- The mandatory agent report (Section 1) must state what was searched
+  for and what, if anything, was found, before describing what was
+  built. "Searched for existing envelope/signature implementations:
+  found `app/core/EnvelopeVerifier.kt`, migrated its consumers to
+  `libs/skylar-envelope` instead of duplicating" is the expected shape
+  — "built a new X" with no search noted is not sufficient for
+  anything security-relevant.
+
+## 6. No Fabricated Stand-ins for Genuinely Separate Systems
+
+Some integration points are defined by the architecture as belonging
+to a physically separate, independently-installed application —
+Starlight, SFM (`abx-sfm-1`), and xtools are explicitly named as
+such in the canonical repo structure doc, specifically because
+Android's UID isolation is a platform security boundary, not a
+documentation convention.
+
+- Never implement a same-process, same-APK class as a stand-in for one
+  of these systems, even temporarily, even for testing, without
+  making that fact impossible to miss: the class name itself must say
+  "Mock" or equivalent, it must live in a clearly separate package
+  (e.g. `.../target/mock/`), and its KDoc must state in its first
+  paragraph that it is not the real system and does not exercise the
+  real system's process/UID boundary.
+- A same-process mock can validate pipeline wiring and interface
+  contract shape. It can NEVER validate anything the architecture
+  specifically requires cross-process/cross-UID isolation for
+  (permission enforcement, non-Skylar-caller rejection, force-stop
+  isolation between independent apps). Do not claim a validation
+  criterion is satisfied on the strength of a same-process mock test
+  if the criterion's own wording depends on process or UID separation
+  — check the wording, not just whether a test passed.
+- If completing a phase genuinely requires changes in a different
+  repository this agent cannot reach, say so explicitly in the agent
+  report and stop short of claiming the phase is complete. A partial,
+  honestly-labeled result is compliant; a fully-passing test suite
+  against a fabricated stand-in, presented as satisfying the real
+  criterion, is not.
+
+## 7. Test-Only Code Must Be Structurally Isolated From Production
+
+Any method, constructor, or code path whose purpose is "for internal
+testing" or equivalent must live in a test source set
+(`src/test/`, `src/androidTest/`) — never in `src/main/`.
+
+- If a genuine constraint forces such code to exist in `src/main/`
+  (e.g. it must be reachable across module boundaries a test source
+  set can't cross), it must be impossible for production code to
+  invoke unintentionally: gate it behind an explicit check that throws
+  unless a debug/test build flag is set, or make its danger
+  unmistakable in both its name and its KDoc (e.g.
+  `unsafeBypassVerificationForTestingOnly`, not `initialize`).
+- A convenience overload that silently accepts pre-verified data and
+  skips a security check — signature verification, authorization,
+  anything this project's architecture treats as mandatory — is not an
+  acceptable trade for test convenience if it sits in production
+  source with an ordinary-looking name. Prefer changing the test to
+  construct real inputs (a real signed artifact, a real keypair) over
+  adding a bypass to the class under test, even when that makes the
+  test more code. See `SkylarCoreTest`/`SkylarCorePhase3Test` for the
+  established pattern: generate an EC keypair, register it, sign a
+  real payload.

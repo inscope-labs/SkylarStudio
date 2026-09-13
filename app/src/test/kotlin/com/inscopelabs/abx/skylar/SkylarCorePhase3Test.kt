@@ -6,19 +6,17 @@ import com.inscopelabs.abx.skylar.audit.AuditLogger
 import com.inscopelabs.abx.skylar.audit.AuditRecord
 import com.inscopelabs.abx.skylar.common.Result
 import com.inscopelabs.abx.skylar.config.SkylarConfig
-import com.inscopelabs.abx.skylar.core.EnvelopeCanonicalizer
-import com.inscopelabs.abx.skylar.core.EnvelopeVerifier
-import com.inscopelabs.abx.skylar.core.PersistentNonceCache
-import com.inscopelabs.abx.skylar.core.RequestEnvelope
 import com.inscopelabs.abx.skylar.core.SkylarCore
-import com.inscopelabs.abx.skylar.crypto.Base64Codec
-import com.inscopelabs.abx.skylar.crypto.EcdsaP256SignatureProvider
-import com.inscopelabs.abx.skylar.crypto.InMemoryKeyRegistry
+import com.inscopelabs.abx.skylar.envelope.EnvelopeCanonicalizer
+import com.inscopelabs.abx.skylar.envelope.EnvelopeVerifier
+import com.inscopelabs.abx.skylar.envelope.RequestEnvelope
+import com.inscopelabs.abx.skylar.envelope.crypto.Base64Codec
+import com.inscopelabs.abx.skylar.envelope.crypto.EcdsaP256SignatureProvider
+import com.inscopelabs.abx.skylar.envelope.crypto.InMemoryKeyRegistry
+import com.inscopelabs.abx.skylar.envelope.nonce.PersistentNonceCache
+import com.inscopelabs.abx.skylar.envelope.policy.PolicyArtifactReader
+import com.inscopelabs.abx.skylar.envelope.policy.SignedPolicyArtifact
 import com.inscopelabs.abx.skylar.ipc.TargetDispatcher
-import com.inscopelabs.abx.skylar.policy.AuthorizationMatrix
-import com.inscopelabs.abx.skylar.policy.PolicyLoader
-import com.inscopelabs.abx.skylar.policy.RoutingTable
-import com.inscopelabs.abx.skylar.policy.SignedPolicyArtifact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -26,6 +24,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.nio.charset.StandardCharsets
@@ -36,7 +35,15 @@ import java.security.spec.ECGenParameterSpec
 
 /**
  * Phase 3 validation test suite: verify -> authorize -> route -> dispatch -> audit.
- * Demonstrates criteria V3.1 through V3.6 network-free with in-process stubs.
+ * Demonstrates criteria V3.1 through V3.6 network-free with in-process stubs
+ * (`TargetDispatcher.registerTargetHandler`), per Phase 3's own scope — real
+ * AIDL dispatch is explicitly out of scope for this phase.
+ *
+ * Policy is now loaded through a real signed [SignedPolicyArtifact] +
+ * [PolicyArtifactReader], not the ungated `initialize(matrix, routingTable)`
+ * overload this file previously called — that overload bypassed signature
+ * verification and has been removed from [SkylarCore] entirely (see
+ * docs/skylar-context-gateway-architecture-addenda.md, 2026-09-12).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -51,7 +58,9 @@ class SkylarCorePhase3Test {
     private lateinit var core: SkylarCore
 
     private lateinit var testCallerPair: KeyPair
+    private lateinit var policySignerPair: KeyPair
     private val testCallerId = "caller.test.client"
+    private val policySignerId = "policy.signer.id"
 
     private fun generateEcKeyPair(): KeyPair {
         val generator = KeyPairGenerator.getInstance("EC")
@@ -103,6 +112,20 @@ class SkylarCorePhase3Test {
         )
     }
 
+    /** Signs an arbitrary JSON payload string as a [SignedPolicyArtifact] using the policy signer key. */
+    private fun signPolicyArtifact(version: String, payload: String): SignedPolicyArtifact {
+        val signatureBytes = EcdsaP256SignatureProvider().sign(
+            policySignerPair.private.encoded,
+            payload.toByteArray(StandardCharsets.UTF_8)
+        )
+        return SignedPolicyArtifact(
+            version = version,
+            canonicalPayload = payload,
+            signerId = policySignerId,
+            signature = Base64Codec.encode(signatureBytes)
+        )
+    }
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -112,7 +135,10 @@ class SkylarCorePhase3Test {
         testCallerPair = generateEcKeyPair()
         keyRegistry.register(testCallerId, testCallerPair.public.encoded)
 
-        nonceCache = PersistentNonceCache(context, config)
+        policySignerPair = generateEcKeyPair()
+        keyRegistry.register(policySignerId, policySignerPair.public.encoded)
+
+        nonceCache = PersistentNonceCache(context, config.nonceCacheTtlMs)
         nonceCache.clearForTesting()
 
         auditLogger = AuditLogger(context, config)
@@ -124,31 +150,49 @@ class SkylarCorePhase3Test {
             context = context,
             config = config,
             keyRegistry = keyRegistry,
-            verifier = EnvelopeVerifier(keyRegistry, config),
+            verifier = EnvelopeVerifier(keyRegistry, clockSkewToleranceMs = config.clockSkewToleranceMs),
             nonceCache = nonceCache,
             auditLogger = auditLogger,
             dispatcher = dispatcher
         )
 
-        val matrix = AuthorizationMatrix(
-            version = "1.0.0",
-            matrix = mapOf(
-                testCallerId to mapOf(
-                    "context.query" to setOf("read"),
-                    "storage.read" to setOf("read", "list"),
-                    "system.execute" to setOf("admin")
-                )
-            )
+        // Real signed authorization matrix + routing table, not raw objects
+        // handed directly to a bypass method.
+        val matrixPayload = JSONObject().apply {
+            put(testCallerId, JSONObject().apply {
+                put("context.query", listOf("read"))
+                put("storage.read", listOf("read", "list"))
+                put("system.execute", listOf("admin"))
+            })
+        }.toString()
+        val routingPayload = JSONObject().apply {
+            put("context.query", "starlight")
+            put("storage.read", "sfm")
+            put("system.execute", "xtools")
+        }.toString()
+
+        val matrixArtifact = signPolicyArtifact("1.0.0", matrixPayload)
+        val routingArtifact = signPolicyArtifact("1.0.0", routingPayload)
+
+        val initResult = core.initialize(
+            authorityArtifact = matrixArtifact,
+            routingArtifact = routingArtifact,
+            parseAuthMatrix = { json ->
+                val obj = JSONObject(json)
+                obj.keys().asSequence().associateWith { caller ->
+                    val capsObj = obj.getJSONObject(caller)
+                    capsObj.keys().asSequence().associateWith { cap ->
+                        val arr = capsObj.getJSONArray(cap)
+                        (0 until arr.length()).map { arr.getString(it) }.toSet()
+                    }
+                }
+            },
+            parseRoutingTable = { json ->
+                val obj = JSONObject(json)
+                obj.keys().asSequence().associateWith { obj.getString(it) }
+            }
         )
-        val routing = RoutingTable(
-            version = "1.0.0",
-            routes = mapOf(
-                "context.query" to "starlight",
-                "storage.read" to "sfm",
-                "system.execute" to "xtools"
-            )
-        )
-        core.initialize(matrix, routing)
+        assertTrue("Test setUp policy must load and verify successfully", initResult.isSuccess)
     }
 
     @Test
@@ -218,7 +262,6 @@ class SkylarCorePhase3Test {
         val result1 = core.processEnvelope(envelope1)
         assertTrue("First attempt should succeed", result1.isSuccess)
 
-        // Replay attempt 1: Immediate in same process
         val envelopeReplay = signEnvelope(
             privateKey = testCallerPair.private,
             callerId = testCallerId,
@@ -230,22 +273,41 @@ class SkylarCorePhase3Test {
         assertTrue("Immediate replay must be rejected", resultReplay.isError)
         assertEquals("REPLAY_DETECTED", (resultReplay as Result.Error).errorCode)
 
-        // Simulate complete process restart: instantiate a brand-new PersistentNonceCache
-        // pointing to the same SharedPreferences disk storage
-        val restartedNonceCache = PersistentNonceCache(context, config)
+        // Simulate complete process restart: instantiate a brand-new
+        // PersistentNonceCache pointing to the same SharedPreferences disk storage.
+        val restartedNonceCache = PersistentNonceCache(context, config.nonceCacheTtlMs)
         val restartedCore = SkylarCore(
             context = context,
             config = config,
             keyRegistry = keyRegistry,
-            verifier = EnvelopeVerifier(keyRegistry, config),
+            verifier = EnvelopeVerifier(keyRegistry, clockSkewToleranceMs = config.clockSkewToleranceMs),
             nonceCache = restartedNonceCache,
             auditLogger = auditLogger,
             dispatcher = dispatcher
         )
-        restartedCore.initialize(
-            AuthorizationMatrix("1.0.0", mapOf(testCallerId to mapOf("context.query" to setOf("read")))),
-            RoutingTable("1.0.0", mapOf("context.query" to "starlight"))
+        val restartInit = restartedCore.initialize(
+            authorityArtifact = signPolicyArtifact("1.0.0", JSONObject().apply {
+                put(testCallerId, JSONObject().apply { put("context.query", listOf("read")) })
+            }.toString()),
+            routingArtifact = signPolicyArtifact("1.0.0", JSONObject().apply {
+                put("context.query", "starlight")
+            }.toString()),
+            parseAuthMatrix = { json ->
+                val obj = JSONObject(json)
+                obj.keys().asSequence().associateWith { caller ->
+                    val capsObj = obj.getJSONObject(caller)
+                    capsObj.keys().asSequence().associateWith { cap ->
+                        val arr = capsObj.getJSONArray(cap)
+                        (0 until arr.length()).map { arr.getString(it) }.toSet()
+                    }
+                }
+            },
+            parseRoutingTable = { json ->
+                val obj = JSONObject(json)
+                obj.keys().asSequence().associateWith { obj.getString(it) }
+            }
         )
+        assertTrue(restartInit.isSuccess)
 
         val resultAfterRestart = restartedCore.processEnvelope(envelopeReplay)
         assertTrue("Replay after simulated restart must be rejected", resultAfterRestart.isError)
@@ -266,9 +328,8 @@ class SkylarCorePhase3Test {
 
         val result = core.processEnvelope(expiredEnvelope)
         assertTrue("Expired envelope must be rejected", result.isError)
-        assertEquals("ENVELOPE_INVALID", (result as Result.Error).errorCode)
+        assertEquals("ENVELOPE_EXPIRED", (result as Result.Error).errorCode)
 
-        // Verify audit log captures the rejection
         val lastAudit = auditLogger.getRecentRecords().last()
         assertEquals(AuditRecord.Decision.DENY, lastAudit.decision)
         assertTrue(lastAudit.reason.contains("expired", ignoreCase = true))
@@ -306,14 +367,12 @@ class SkylarCorePhase3Test {
 
     @Test
     fun v3_6_failureOfOneTargetStub_leavesOtherStubsReachable() {
-        // Starlight stub fails with an error/exception
         dispatcher.registerTargetHandler("starlight") { _, _ ->
             throw IllegalStateException("Simulated Starlight hardware crash")
         }
 
-        // SFM stub functions normally
         var sfmExecuted = false
-        dispatcher.registerTargetHandler("sfm") { cap, _ ->
+        dispatcher.registerTargetHandler("sfm") { _, _ ->
             sfmExecuted = true
             Result.Success(mapOf("file" to "content.txt"))
         }
@@ -325,11 +384,9 @@ class SkylarCorePhase3Test {
             scope = "read"
         )
         val starlightResult = core.processEnvelope(starlightEnvelope)
-        // Pipeline allowed and dispatched, but target execution failed
         assertTrue("Target failure returns error", starlightResult.isError)
         assertEquals("TARGET_EXECUTION_EXCEPTION", (starlightResult as Result.Error).errorCode)
 
-        // Verify SFM request is completely unaffected and succeeds
         val sfmEnvelope = signEnvelope(
             privateKey = testCallerPair.private,
             callerId = testCallerId,
@@ -342,42 +399,43 @@ class SkylarCorePhase3Test {
     }
 
     @Test
-    fun policyLoader_rejectsInvalidSignatureAndFailsClosed() {
-        val policySignerPair = generateEcKeyPair()
-        val signerId = "policy.signer.id"
-        keyRegistry.register(signerId, policySignerPair.public.encoded)
-
-        val policyLoader = PolicyLoader(context, keyRegistry)
+    fun policyReader_rejectsInvalidSignatureAndFailsClosed() {
+        val policyReader = PolicyArtifactReader(keyRegistry)
 
         val payload = "caller.a:cap.x:read"
-        val validSig = EcdsaP256SignatureProvider().sign(
-            policySignerPair.private.encoded,
-            payload.toByteArray(StandardCharsets.UTF_8)
-        )
-
-        // Valid artifact
-        val validArtifact = SignedPolicyArtifact(
-            version = "2.0.0",
-            canonicalPayload = payload,
-            signerId = signerId,
-            signature = Base64Codec.encode(validSig)
-        )
-        val loadValid = policyLoader.loadAuthorizationMatrixFromArtifact(validArtifact) {
+        val validArtifact = signPolicyArtifact("2.0.0", payload)
+        val loadValid = policyReader.readAuthorizationMatrix(validArtifact) {
             mapOf("caller.a" to mapOf("cap.x" to setOf("read")))
         }
         assertTrue("Valid artifact must load successfully", loadValid.isSuccess)
 
-        // Tampered artifact (altered payload)
+        // Tampered artifact (altered payload after signing)
         val tamperedArtifact = validArtifact.copy(canonicalPayload = "caller.a:cap.x:admin")
-        val loadTampered = policyLoader.loadAuthorizationMatrixFromArtifact(tamperedArtifact) {
+        val loadTampered = policyReader.readAuthorizationMatrix(tamperedArtifact) {
             mapOf("caller.a" to mapOf("cap.x" to setOf("admin")))
         }
         assertTrue("Tampered policy artifact must be rejected", loadTampered.isError)
 
-        // Fallback default-deny check
-        val (defaultMatrix, defaultRouting) = policyLoader.failClosedDefaults()
-        assertFalse(defaultMatrix.isAuthorized("caller.a", "cap.x"))
-        assertEquals(0, defaultMatrix.callerCount())
-        assertEquals(0, defaultRouting.routeCount())
+        // Fallback default-deny check via SkylarCore.initialize with no artefacts
+        val denyOnlyCore = SkylarCore(
+            context = context,
+            config = config,
+            keyRegistry = keyRegistry,
+            verifier = EnvelopeVerifier(keyRegistry, clockSkewToleranceMs = config.clockSkewToleranceMs),
+            nonceCache = PersistentNonceCache(context, config.nonceCacheTtlMs).apply { clearForTesting() },
+            auditLogger = auditLogger,
+            dispatcher = TargetDispatcher(context)
+        )
+        val failClosedInit = denyOnlyCore.initialize()
+        assertTrue(failClosedInit.isSuccess) // "succeeds" into the safe fail-closed state
+        val deniedEnvelope = signEnvelope(
+            privateKey = testCallerPair.private,
+            callerId = testCallerId,
+            capability = "context.query",
+            scope = "read"
+        )
+        val deniedResult = denyOnlyCore.processEnvelope(deniedEnvelope)
+        assertTrue("No policy loaded must mean everything is denied", deniedResult.isError)
+        assertEquals("UNAUTHORIZED", (deniedResult as Result.Error).errorCode)
     }
 }

@@ -2,7 +2,7 @@ package com.inscopelabs.abx.skylar
 
 import android.app.Application
 import com.inscopelabs.abx.skylar.core.SkylarCore
-import com.inscopelabs.abx.skylar.crypto.InMemoryKeyRegistry
+import com.inscopelabs.abx.skylar.envelope.crypto.InMemoryKeyRegistry
 import com.inscopelabs.abx.skylar.diagnostics.GlobalExceptionHandler
 import com.inscopelabs.abx.skylar.diagnostics.Logger
 import com.inscopelabs.abx.skylar.envelope.EnvelopeLog
