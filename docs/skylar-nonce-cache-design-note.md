@@ -24,10 +24,19 @@ This design note satisfies **Phase 3 Deliverable 4**:
 The replay protection contract is decoupled from its storage mechanism via a clean interface:
 
 ```kotlin
+// Canonical location as of 2026-09-12: libs/skylar-envelope/.../envelope/nonce/NonceCache.kt
+// (previously an app-local duplicate existed with the method named checkAndRecord;
+// consolidated onto this one — see architecture addenda, 2026-09-12)
 interface NonceCache {
+    fun isSeen(callerId: String, nonce: String): Boolean
+    fun markSeen(callerId: String, nonce: String, expiresAt: Long)
+
     /** True if newly recorded (accept this nonce); false if already seen (replay — reject). */
-    fun checkAndRecord(callerId: String, nonce: String, expiresAt: Long): Boolean
-    fun purgeExpired(): Int
+    fun checkAndMarkSeen(callerId: String, nonce: String, expiresAt: Long): Boolean {
+        if (isSeen(callerId, nonce)) return false
+        markSeen(callerId, nonce, expiresAt)
+        return true
+    }
 }
 ```
 
@@ -35,7 +44,7 @@ interface NonceCache {
 1. **Compound Keying:** Every entry is keyed by `caller_id:nonce`. A nonce is never evaluated globally across callers, preventing cross-caller namespace collisions or denial-of-service attempts.
 2. **Fail-Closed Semantics:** If the underlying store fails to durably persist the entry (disk error, timeout, or write conflict), the method returns `false` (replay detected/rejected).
 3. **Bounded Lifetime:** Every entry carries an expiration timestamp `maxOf(expiresAt, now + ttl)`. Once `now > expiresAt`, the entry may be safely pruned because the envelope verifier independently rejects expired envelopes before checking the nonce cache.
-4. **Process Restart Survival:** For single-node deployments on Android, synchronous commits guarantee that once `checkAndRecord()` returns `true`, the nonce survives immediate process crash or restart.
+4. **Process Restart Survival:** For single-node deployments on Android, synchronous commits guarantee that once `checkAndMarkSeen()` returns `true`, the nonce survives immediate process crash or restart.
 
 ---
 
@@ -82,12 +91,15 @@ Because `SkylarCore` relies strictly on the `NonceCache` interface via construct
 ```kotlin
 class SkylarCore(
     private val context: Context,
-    private val config: SkylarConfig = SkylarConfig.DEFAULT,
-    private val keyRegistry: KeyRegistry = InMemoryKeyRegistry(),
-    private val nonceCache: NonceCache = PersistentNonceCache(context, config),
+    val keyRegistry: KeyRegistry,
+    val config: SkylarConfig = SkylarConfig.DEFAULT,
+    val nonceCache: NonceCache = PersistentNonceCache(context, config.nonceCacheTtlMs),
     ...
 )
 ```
+(`keyRegistry` has no default — it must be supplied explicitly by the
+caller, deliberately, so nothing silently constructs a real
+`SkylarCore` with an implicit, possibly-empty registry without saying so.)
 
 No alterations to `SkylarCore`, `EnvelopeVerifier`, `AuthorizationMatrix`, or the pipeline execution flow are required.
 
@@ -99,7 +111,7 @@ class RedisNonceCache(
     private val defaultTtlMs: Long = 3600_000L
 ) : NonceCache {
 
-    override fun checkAndRecord(callerId: String, nonce: String, expiresAt: Long): Boolean {
+    override fun checkAndMarkSeen(callerId: String, nonce: String, expiresAt: Long): Boolean {
         val key = "skylar:nonce:$callerId:$nonce"
         val now = System.currentTimeMillis()
         val ttlMs = maxOf(expiresAt - now, defaultTtlMs)

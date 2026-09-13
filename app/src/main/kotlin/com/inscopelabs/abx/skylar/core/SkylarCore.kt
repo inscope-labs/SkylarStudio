@@ -5,41 +5,60 @@ import com.inscopelabs.abx.skylar.audit.AuditLogger
 import com.inscopelabs.abx.skylar.audit.AuditRecord
 import com.inscopelabs.abx.skylar.common.Result
 import com.inscopelabs.abx.skylar.config.SkylarConfig
-import com.inscopelabs.abx.skylar.crypto.KeyRegistry
 import com.inscopelabs.abx.skylar.diagnostics.Logger
+import com.inscopelabs.abx.skylar.envelope.EnvelopeVerifier
+import com.inscopelabs.abx.skylar.envelope.RequestEnvelope
+import com.inscopelabs.abx.skylar.envelope.crypto.KeyRegistry
+import com.inscopelabs.abx.skylar.envelope.nonce.NonceCache
+import com.inscopelabs.abx.skylar.envelope.nonce.PersistentNonceCache
+import com.inscopelabs.abx.skylar.envelope.policy.AuthorizationMatrix
+import com.inscopelabs.abx.skylar.envelope.policy.PolicyArtifactReader
+import com.inscopelabs.abx.skylar.envelope.policy.RoutingTable
+import com.inscopelabs.abx.skylar.envelope.policy.SignedPolicyArtifact
 import com.inscopelabs.abx.skylar.ipc.TargetDispatcher
 import com.inscopelabs.abx.skylar.mesh.MeshNode
 import com.inscopelabs.abx.skylar.mesh.TsnetMeshNode
-import com.inscopelabs.abx.skylar.policy.AuthorizationMatrix
-import com.inscopelabs.abx.skylar.policy.PolicyLoader
-import com.inscopelabs.abx.skylar.policy.RoutingTable
-import com.inscopelabs.abx.skylar.policy.SignedPolicyArtifact
 
 /**
  * The single Policy Enforcement Point for the Skylar Context Gateway:
  * verify -> replay-check -> authorize -> route -> dispatch -> audit.
  *
- * Two behavioral changes relative to the prior prototype matter here:
+ * As of this revision, wired to the canonical `libs/skylar-envelope`
+ * module rather than a duplicate app-local implementation. A prior pass
+ * had built the envelope/crypto/policy logic directly in `app/core`,
+ * `app/crypto`, and `app/policy`; a *separate* pass then built the
+ * correct, canonical `libs/skylar-envelope` module (matching the
+ * repo-structure doc's intended shared-library shape, consumable by
+ * Starlight/SFM/xtools too) without migrating the app off the
+ * duplicate. Both implementations were legitimate, fail-closed designs
+ * — this consolidation keeps the one in the architecturally-correct
+ * location and removes the other, rather than picking a "winner" on
+ * code-quality grounds alone.
  *
- * 1. [EnvelopeVerifier] now requires a real [KeyRegistry] and performs
- *    real signature verification, not a string-length check.
- * 2. [initialize] fails closed to [AuthorizationMatrix.EMPTY] /
- *    [RoutingTable.EMPTY] whenever no *verified* signed policy artefact
- *    is supplied, instead of silently loading a hardcoded fixture and
- *    reporting success. Until Phase 1's actual policy-signing pipeline
- *    exists and produces real artefacts, starting in the fail-closed
- *    (all-deny) state is the CORRECT behavior, not a bug to work around.
+ * Also removed in this revision: a `initialize(matrix, routingTable)`
+ * overload that had been added directly to this production class,
+ * labeled "for internal testing," which bypassed all signature
+ * verification with nothing gating it to actual test code — and, on
+ * inspection, a pre-existing `reloadPolicy(matrix, routingTable)`
+ * method (from this class's own original version) with the identical
+ * unguarded-bypass shape, unused anywhere, removed for the same reason
+ * rather than held to a different standard just because it predates
+ * the newer one. See
+ * `docs/skylar-context-gateway-architecture-addenda.md` (2026-09-12,
+ * "Removed ungated test-bypass...") for the full rationale. Tests now
+ * construct real [SignedPolicyArtifact]s instead, the same way
+ * production code would have to.
  */
 class SkylarCore(
     private val context: Context,
     val keyRegistry: KeyRegistry,
     val config: SkylarConfig = SkylarConfig.DEFAULT,
-    val verifier: EnvelopeVerifier = EnvelopeVerifier(keyRegistry, config),
-    val nonceCache: NonceCache = PersistentNonceCache(context, config),
+    val verifier: EnvelopeVerifier = EnvelopeVerifier(keyRegistry, clockSkewToleranceMs = config.clockSkewToleranceMs),
+    val nonceCache: NonceCache = PersistentNonceCache(context, config.nonceCacheTtlMs),
     val auditLogger: AuditLogger = AuditLogger(context, config),
     val dispatcher: TargetDispatcher = TargetDispatcher(context),
-    val meshNode: MeshNode = TsnetMeshNode(),
-    private val policyLoader: PolicyLoader = PolicyLoader(context, keyRegistry, config)
+    val meshManager: MeshNode = TsnetMeshNode(),
+    private val policyReader: PolicyArtifactReader = PolicyArtifactReader(keyRegistry)
 ) {
     companion object {
         private const val TAG = "SkylarCore"
@@ -56,6 +75,12 @@ class SkylarCore(
      * fails closed to EMPTY for BOTH tables — a trustworthy matrix
      * paired with an untrustworthy routing table (or vice versa) is not
      * a safe half-initialized state to run in.
+     *
+     * There is deliberately no other way to set the active policy from
+     * production code. Tests that need a specific matrix/routing table
+     * must sign one — see `SkylarCoreTest`/`SkylarCorePhase3Test` for
+     * the pattern (generate an EC keypair, register it under a
+     * policy-signer identity, sign the canonical payload).
      */
     fun initialize(
         authorityArtifact: SignedPolicyArtifact? = null,
@@ -72,10 +97,10 @@ class SkylarCore(
                 return Result.Success(Unit)
             }
 
-            val matrixResult = policyLoader.loadAuthorizationMatrixFromArtifact(authorityArtifact, parseAuthMatrix)
-            val routingResult = policyLoader.loadRoutingTableFromArtifact(routingArtifact, parseRoutingTable)
+            val matrixResult = policyReader.readAuthorizationMatrix(authorityArtifact, parseAuthMatrix)
+            val routingResult = policyReader.readRoutingTable(routingArtifact, parseRoutingTable)
 
-            if (matrixResult is Result.Error || routingResult is Result.Error) {
+            if (matrixResult.isError || routingResult.isError) {
                 Logger.e(TAG, "Signed policy artefact verification failed — failing closed to EMPTY")
                 authMatrix = AuthorizationMatrix.EMPTY
                 routingTable = RoutingTable.EMPTY
@@ -91,30 +116,23 @@ class SkylarCore(
         }
     }
 
-    /**
-     * Initializes Skylar Core directly with pre-verified [AuthorizationMatrix] and [RoutingTable].
-     * Primarily used for in-process testing and internal test harnesses.
-     */
-    fun initialize(matrix: AuthorizationMatrix, routingTable: RoutingTable): Result<Unit> {
-        synchronized(lock) {
-            authMatrix = matrix
-            this.routingTable = routingTable
-            isInitialized = true
-            Logger.i(TAG, "Skylar Core initialized directly: ${matrix.callerCount()} callers, ${routingTable.routeCount()} routes")
-            return Result.Success(Unit)
-        }
-    }
-
     fun processEnvelope(envelope: RequestEnvelope): Result<Map<String, Any?>> {
         val startTime = System.currentTimeMillis()
         Logger.i(TAG, "--> Pipeline START: caller='${envelope.callerId}', capability='${envelope.capability}', nonce='${envelope.nonce}'")
 
         val verifyResult = verifier.verify(envelope)
-        if (verifyResult is Result.Error) {
-            return deny(envelope, "Envelope verification failed: ${verifyResult.message}", startTime, "ENVELOPE_INVALID")
+        if (verifyResult.isFailure) {
+            val failure = verifyResult.failureOrNull()
+            return deny(envelope, "Envelope verification failed: ${failure?.reason}", startTime, failure?.errorCode ?: "ENVELOPE_INVALID")
         }
 
-        val isNewNonce = nonceCache.checkAndRecord(envelope.callerId, envelope.nonce, envelope.expiresAt)
+        // Signature is verified BEFORE the nonce is checked-and-marked (not the
+        // reverse): marking a nonce "seen" for an envelope whose signature
+        // hasn't been confirmed yet would let an attacker with no valid
+        // signature still consume a legitimate caller's future nonce value,
+        // a denial-of-service vector against that caller. See addenda entry
+        // "Nonce-check ordering relative to signature verification".
+        val isNewNonce = nonceCache.checkAndMarkSeen(envelope.callerId, envelope.nonce, envelope.expiresAt)
         if (!isNewNonce) {
             return deny(envelope, "Replay detected for nonce '${envelope.nonce}'", startTime, "REPLAY_DETECTED")
         }
@@ -176,14 +194,6 @@ class SkylarCore(
             )
         )
         return Result.Error(reason, errorCode = code)
-    }
-
-    fun reloadPolicy(newMatrix: AuthorizationMatrix, newRoutingTable: RoutingTable) {
-        synchronized(lock) {
-            authMatrix = newMatrix
-            routingTable = newRoutingTable
-            Logger.i(TAG, "Policy updated: Matrix v${newMatrix.version}, Routing v${newRoutingTable.version}")
-        }
     }
 
     fun isReady(): Boolean = synchronized(lock) { isInitialized }

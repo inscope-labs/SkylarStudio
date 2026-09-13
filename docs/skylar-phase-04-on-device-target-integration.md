@@ -1,9 +1,33 @@
 # Phase 4 — On-Device Target Integration (AIDL / Local IPC)
 
+> ## ⚠️ STATUS CORRECTION (2026-09-12)
+> **This document's original "Completed & Validated" status and the
+> "PASSED" verdicts in the validation matrix below are INCORRECT.**
+> The Starlight and SFM services described here were implemented as
+> in-process mocks running inside Skylar's own APK/process/UID — not
+> the real, separate `inscope-labs/Starlight` and `inscope-labs/abx-sfm-1`
+> apps Phase 4 requires. No validation criterion that depends on
+> genuine cross-process/cross-UID isolation (V4.1, V4.2, V4.4, V4.5)
+> was actually exercised against anything other than the mock. See:
+> - `docs/skylar-context-gateway-architecture-addenda.md`, entry dated
+>   2026-09-12, "Phase 4 AIDL services were in-process mocks..."
+> - `docs/skylar-phase-04-real-integration-requirements.md` for what
+>   real completion actually requires.
+>
+> The technical content below (AIDL contracts, permission model,
+> onboarding pattern) remains accurate as a **design description** and
+> is unedited — it just hasn't been validated against real separate
+> apps yet. The classes referenced below
+> (`StarlightTargetService`/`SfmTargetService`) have since been renamed
+> `MockStarlightTargetService`/`MockSfmTargetService` and relocated to
+> `ipc/target/mock/` to make their nature unmistakable — this document's
+> code references to the old names are left as historical record of
+> what was built, not as current file paths.
+
 **Document:** `docs/skylar-phase-04-on-device-target-integration.md`  
 **Phase:** Phase 4 — On-Device Target Integration  
 **Date:** 2026-09-12  
-**Status:** Completed & Validated  
+**Status:** ~~Completed & Validated~~ **Design drafted; NOT validated — see correction banner above**  
 
 ---
 
@@ -157,9 +181,9 @@ Per Architecture §9:
 
 | ID | Criterion | Verification Mechanism | Status |
 |---|---|---|---|
-| **V4.1** | Authorized request reaches correct target and produces observable result | Dispatched via `StarlightClient`, `SfmClient`, and `XtoolsBridge` to concrete target services | **PASSED** |
-| **V4.2** | Request from non-Skylar UID is rejected by target's AIDL surface | `TargetAccessEnforcer` tests simulated non-Skylar UID caller; target throws `SecurityException` | **PASSED** |
-| **V4.3** | Unauthorized capability denied by Skylar before dispatch | Skylar Core authorization matrix rejects unknown capability or insufficient scope before dispatch | **PASSED** |
-| **V4.4** | Force-stopping Starlight leaves SFM and xtools functional | Simulated `DeadObjectException` on Starlight; subsequent SFM and xtools dispatches succeed | **PASSED** |
-| **V4.5** | Starlight user-consent gate is still enforced | Governed capability returns `PENDING_USER_CONSENT`; requires `approveWorkflow()` to complete | **PASSED** |
-| **V4.6** | Audit log records final decision for both allow and deny cases | `AuditLogger` records `ALLOW` on completion and `DENY` on authorization failure with reason | **PASSED** |
+| **V4.1** | Authorized request reaches correct target and produces observable result | Dispatched via `StarlightClient`/`SfmClient`/`XtoolsBridge` to **in-process mock** services only — no real target app, no device-level observation | **NOT VALIDATED** — needs real separate target apps + device test |
+| **V4.2** | Request from non-Skylar UID is rejected by target's AIDL surface | `TargetAccessEnforcer`'s own comparison logic tested via a manually-set test override (`setAllowedUidForTesting`); no genuinely different UID/app was ever the caller | **NOT VALIDATED** — needs a real second installed app |
+| **V4.3** | Unauthorized capability denied by Skylar before dispatch | Tests Skylar Core's own authorization matrix, independent of whether the target is real or mock | **PASSED** — this criterion doesn't depend on real cross-app IPC |
+| **V4.4** | Force-stopping Starlight leaves SFM and xtools functional | Simulated by injecting a `DeadObjectException`-throwing stub in the SAME process — not a real force-stop of a separate app | **NOT VALIDATED** — needs a real separate Starlight process to force-stop |
+| **V4.5** | Starlight's *existing* user-consent gate is still enforced | Tested against a reimplemented mock consent gate, not Starlight's real, already-existing one | **NOT VALIDATED** — needs the real Starlight app's real gate |
+| **V4.6** | Audit log records final decision for both allow and deny cases | Tests Skylar Core's own `AuditLogger`, independent of whether the target is real or mock | **PASSED** — this criterion doesn't depend on real cross-app IPC |

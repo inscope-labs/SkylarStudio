@@ -45,9 +45,13 @@
             android:process=":crash"
             android:theme="@style/Theme.Skylar" />
 
-        <!-- Phase 4: Protected Capability Target AIDL Services -->
+        <!-- Phase 4: IN-PROCESS MOCKS ONLY — not the real Starlight/SFM apps.
+             See docs/skylar-phase-04-real-integration-requirements.md.
+             Platform-level access control (signature permission) is real
+             and correctly configured below, but these services are not a
+             substitute for genuinely separate installed apps. -->
         <service
-            android:name=".ipc.target.StarlightTargetService"
+            android:name=".ipc.target.mock.MockStarlightTargetService"
             android:exported="true"
             android:permission="com.inscopelabs.abx.skylar.permission.DISPATCH_CAPABILITY">
             <intent-filter>
@@ -56,7 +60,7 @@
         </service>
 
         <service
-            android:name=".ipc.target.SfmTargetService"
+            android:name=".ipc.target.mock.MockSfmTargetService"
             android:exported="true"
             android:permission="com.inscopelabs.abx.skylar.permission.DISPATCH_CAPABILITY">
             <intent-filter>

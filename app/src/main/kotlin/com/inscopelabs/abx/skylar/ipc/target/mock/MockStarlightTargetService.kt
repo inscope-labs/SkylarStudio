@@ -1,4 +1,4 @@
-package com.inscopelabs.abx.skylar.ipc.target
+package com.inscopelabs.abx.skylar.ipc.target.mock
 
 import android.app.Service
 import android.content.Intent
@@ -11,17 +11,53 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Concrete on-device AIDL service for Starlight (UI execution & accessibility agent).
+ * ================================ NOT REAL PHASE 4 ================================
+ * THIS IS AN IN-PROCESS MOCK, NOT THE REAL STARLIGHT APP.
  *
- * Security & Governance Requirements:
+ * This class runs inside Skylar's own APK/process/UID — declared as a
+ * `<service>` in Skylar's own AndroidManifest.xml. It is NOT the real
+ * `inscope-labs/Starlight` app, which per the canonical repo structure
+ * doc must remain a physically separate installed app (Android's UID
+ * isolation is a platform constraint, not a documentation one).
+ *
+ * Phase 4's actual objective ("Connect Skylar Core to the real
+ * Capability Targets... using platform-enforced local IPC only" —
+ * phased-development-plan Phase 4 §1) and its validation criteria
+ * (V4.1-V4.6, especially V4.2: "Request from any non-Skylar UID is
+ * rejected by the target's AIDL surface") require a genuinely separate
+ * app with a genuinely different UID. A same-process mock can never
+ * exercise that boundary, no matter how the enforcement logic reads —
+ * see [TargetAccessEnforcer], whose `callingUid == myUid` fast path
+ * means calls from this mock will always short-circuit as "authorized"
+ * without ever reaching the signature/permission checks meant for a
+ * real external caller.
+ *
+ * Tests against this class validate the dispatch pipeline's wiring and
+ * the AIDL interface contract shape — genuinely useful — but they do
+ * NOT satisfy any Phase 4 validation criterion. See
+ * `docs/skylar-phase-04-real-integration-requirements.md` for what
+ * actually completing Phase 4 requires.
+ * =====================================================================
+ *
+ * Concrete in-process AIDL-shaped mock for Starlight (UI execution & accessibility agent).
+ *
+ * Security & Governance Requirements (as designed, not yet validated cross-process):
  * 1. Protected by platform-level access control via [TargetAccessEnforcer] (rejects non-Skylar callers).
  * 2. Governed Workflow Gate: Skylar authorization does NOT bypass Starlight's user-consent gate.
  *    High-impact capabilities queue in the Request Inbox and require explicit user approval.
+ *
+ * Note on the consent gate specifically: the REAL Starlight app already
+ * has its own existing user-consent gate (per Phase 4 §2: "Confirmation
+ * that Starlight's existing user-consent gate remains mandatory and is
+ * not bypassed by Skylar authorization" — implying an existing
+ * mechanism to confirm, not one to invent). The Request Inbox logic
+ * below is a plausible reimplementation for pipeline-shape testing, but
+ * it is not a substitute for testing against Starlight's actual gate.
  */
-class StarlightTargetService : Service() {
+class MockStarlightTargetService : Service() {
 
     companion object {
-        private const val TAG = "StarlightTargetService"
+        private const val TAG = "MockStarlightTargetService"
         const val ACTION_BIND = "com.inscopelabs.abx.skylar.action.BIND_STARLIGHT"
 
         // Capabilities requiring explicit user-consent gate in Request Inbox
@@ -47,7 +83,7 @@ class StarlightTargetService : Service() {
 
         override fun executeCapability(capability: String, paramsJson: String): String {
             Logger.i(TAG, "executeCapability invoked: capability='$capability'")
-            TargetAccessEnforcer.enforceSkylarCaller(this@StarlightTargetService)
+            TargetAccessEnforcer.enforceSkylarCaller(this@MockStarlightTargetService)
 
             if (!isServiceAvailable.get()) {
                 Logger.w(TAG, "Starlight service is currently unavailable")
@@ -64,19 +100,19 @@ class StarlightTargetService : Service() {
         }
 
         override fun isAvailable(): Boolean {
-            TargetAccessEnforcer.enforceSkylarCaller(this@StarlightTargetService)
+            TargetAccessEnforcer.enforceSkylarCaller(this@MockStarlightTargetService)
             return isServiceAvailable.get()
         }
 
         override fun requiresUserConsent(capability: String): Boolean {
-            TargetAccessEnforcer.enforceSkylarCaller(this@StarlightTargetService)
+            TargetAccessEnforcer.enforceSkylarCaller(this@MockStarlightTargetService)
             val requires = GOVERNED_CAPABILITIES.contains(capability.lowercase())
             Logger.d(TAG, "Checking consent requirement for '$capability': $requires")
             return requires
         }
 
         override fun approveWorkflow(workflowId: String): Boolean {
-            TargetAccessEnforcer.enforceSkylarCaller(this@StarlightTargetService)
+            TargetAccessEnforcer.enforceSkylarCaller(this@MockStarlightTargetService)
             Logger.i(TAG, "User approval granted for workflowId='$workflowId'")
             val pending = pendingInboxWorkflows.remove(workflowId)
             return if (pending != null) {
@@ -98,7 +134,7 @@ class StarlightTargetService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder {
-        Logger.i(TAG, "Client binding to StarlightTargetService with intent: $intent")
+        Logger.i(TAG, "Client binding to MockStarlightTargetService with intent: $intent")
         TargetAccessEnforcer.enforceSkylarCaller(this)
         return binder
     }
