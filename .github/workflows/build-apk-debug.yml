@@ -70,6 +70,14 @@ jobs:
             echo "Using existing debug.keystore"
           fi
 
+      - name: Cache Robolectric android-all jars
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: ${{ runner.os }}-robolectric-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-robolectric-
+
       - name: Run Unit Tests
         run: gradle test -PversionCode=${{ steps.version.outputs.versionCode }} -PversionName="${{ steps.version.outputs.versionName }}"
 

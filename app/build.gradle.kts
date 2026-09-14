@@ -56,6 +56,13 @@ android {
     unitTests {
       isIncludeAndroidResources = true
       isReturnDefaultValues = true
+      all {
+        (it as? org.gradle.api.tasks.testing.Test)?.apply {
+          systemProperty("sun.net.client.defaultConnectTimeout", "60000")
+          systemProperty("sun.net.client.defaultReadTimeout", "120000")
+          systemProperty("http.keepAlive", "false")
+        }
+      }
     }
   }
   dependenciesInfo {

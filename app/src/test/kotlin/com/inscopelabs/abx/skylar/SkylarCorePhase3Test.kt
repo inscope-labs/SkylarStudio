@@ -47,7 +47,7 @@ import java.security.spec.ECGenParameterSpec
  * docs/skylar-context-gateway-architecture-addenda.md, 2026-09-12).
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(manifest = Config.NONE)
 class SkylarCorePhase3Test {
 
     private lateinit var context: Context

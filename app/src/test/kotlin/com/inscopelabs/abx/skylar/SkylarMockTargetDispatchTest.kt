@@ -63,7 +63,7 @@ import java.security.spec.ECGenParameterSpec
  * ==============================================================================
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(manifest = Config.NONE)
 class SkylarMockTargetDispatchTest {
 
     private lateinit var context: Context
