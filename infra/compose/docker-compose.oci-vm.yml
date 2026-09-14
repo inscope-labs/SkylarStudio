@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  # Cloudflare Tunnel daemon
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    volumes:
+      - ../relay-forwarder/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - /etc/cloudflared/tunnel-credentials.json:/etc/cloudflared/tunnel-credentials.json:ro
+    network_mode: "host"
+
+  # Relay Forwarder Process (Opaque proxy to Tailscale mesh destination)
+  relay-forwarder:
+    build:
+      context: ../relay-forwarder
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - SKYLAR_MESH_TARGET_HOST=100.100.1.50
+      - SKYLAR_MESH_TARGET_PORT=8443
+      - RELAY_LISTEN_PORT=8080
+      - RATE_LIMIT_MAX_PER_MIN=120
+    network_mode: "host"
+
+  # Centralized Issuer Service (Colocated on OCI VM with separate keystore volume)
+  issuer-service:
+    build:
+      context: ../issuer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - ISSUER_PORT=8090
+      - ISSUER_CONFIG_PATH=/app/config/issuer.config.yaml
+    volumes:
+      - issuer-secret-keystore:/var/skylar/issuer-secrets:ro
+    network_mode: "host"
+
+volumes:
+  issuer-secret-keystore:
+    external: false

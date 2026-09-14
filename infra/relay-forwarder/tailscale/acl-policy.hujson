@@ -1,0 +1,36 @@
+// Tailscale ACL Policy for Skylar Context Gateway
+// Enforces least-privilege mesh access:
+// OCI Relay Forwarder (tag:relay-forwarder) can reach ONLY Skylar gateway port (8443) on tag:skylar-gateway.
+{
+  "tagOwners": {
+    "tag:skylar-gateway": ["autogroup:admin"],
+    "tag:relay-forwarder": ["autogroup:admin"],
+    "tag:persistent-caller": ["autogroup:admin"]
+  },
+  "acls": [
+    // 1. Relay Forwarder can ONLY dial Skylar gateway port 8443
+    {
+      "action": "accept",
+      "src": ["tag:relay-forwarder"],
+      "dst": ["tag:skylar-gateway:8443"]
+    },
+    // 2. Persistent callers can connect directly to Skylar gateway port 8443 (Lane A)
+    {
+      "action": "accept",
+      "src": ["tag:persistent-caller"],
+      "dst": ["tag:skylar-gateway:8443"]
+    },
+    // 3. Admin access for management
+    {
+      "action": "accept",
+      "src": ["autogroup:admin"],
+      "dst": ["*:*"]
+    }
+  ],
+  "nodeAttrs": [
+    {
+      "target": ["tag:relay-forwarder"],
+      "attr": ["relay-only"]
+    }
+  ]
+}

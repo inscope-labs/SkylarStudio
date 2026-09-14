@@ -1,0 +1,8 @@
+# Non-secret connection parameters for OCI Always Free VM
+oci_vm:
+  host: "138.2.140.22"
+  user: "opc"
+  ssh_key_path: "~/.ssh/id_ed25519_oci"
+  target_dir: "/opt/skylar-infra"
+  tailscale_ip: "100.100.1.10"
+  tailscale_tag: "tag:relay-forwarder"

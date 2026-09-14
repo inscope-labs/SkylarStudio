@@ -1,0 +1,23 @@
+# Cloudflare Tunnel Configuration for Skylar Lane B Relay Forwarder (OCI VM)
+# Ingress terminates on localhost port 8080 (the Relay Forwarder process)
+# Only traffic validated by Cloudflare Access is routed through this tunnel.
+
+tunnel: "skylar-ingress-tunnel"
+credentials-file: "/etc/cloudflared/tunnel-credentials.json"
+
+ingress:
+  # Route Lane B gateway requests to local relay forwarder
+  - hostname: "gateway.skylar.inscopelabs.com"
+    path: "/lane-b/*"
+    service: "http://127.0.0.1:8080"
+    originRequest:
+      connectTimeout: 5s
+      noTLSVerify: false
+
+  # Health check endpoint for Cloudflare Access / uptime monitors
+  - hostname: "gateway.skylar.inscopelabs.com"
+    path: "/healthz"
+    service: "http://127.0.0.1:8080/healthz"
+
+  # Catch-all rule (returns HTTP 404)
+  - service: http_status:404

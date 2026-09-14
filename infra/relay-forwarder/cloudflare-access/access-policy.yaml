@@ -1,0 +1,25 @@
+# Cloudflare Access Application Policy for Skylar Context Gateway (Lane B)
+# Gated by Service Token authentication for ephemeral callers.
+
+application:
+  name: "Skylar Context Gateway - Lane B Edge"
+  domain: "gateway.skylar.inscopelabs.com"
+  type: "self_hosted"
+  session_duration: "15m"
+  auto_redirect_to_identity: false
+
+policies:
+  - name: "Allow-Ephemeral-Service-Tokens"
+    decision: "non_identity"
+    rules:
+      include:
+        - service_token:
+            token_id: "cf-token-ephemeral-callers"
+            description: "Service token allocated to authorized ephemeral callers (CI runners, agent instances)"
+    require: []
+    exclude: []
+
+headers_injected:
+  - "Cf-Access-Authenticated-User-Email"
+  - "Cf-Access-Client-Id"
+  - "CF-Ray"
