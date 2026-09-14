@@ -24,6 +24,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONArray
 import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -160,9 +161,9 @@ class SkylarCorePhase3Test {
         // handed directly to a bypass method.
         val matrixPayload = JSONObject().apply {
             put(testCallerId, JSONObject().apply {
-                put("context.query", listOf("read"))
-                put("storage.read", listOf("read", "list"))
-                put("system.execute", listOf("admin"))
+                put("context.query", JSONArray(listOf("read")))
+                put("storage.read", JSONArray(listOf("read", "list")))
+                put("system.execute", JSONArray(listOf("admin")))
             })
         }.toString()
         val routingPayload = JSONObject().apply {
@@ -287,7 +288,7 @@ class SkylarCorePhase3Test {
         )
         val restartInit = restartedCore.initialize(
             authorityArtifact = signPolicyArtifact("1.0.0", JSONObject().apply {
-                put(testCallerId, JSONObject().apply { put("context.query", listOf("read")) })
+                put(testCallerId, JSONObject().apply { put("context.query", JSONArray(listOf("read"))) })
             }.toString()),
             routingArtifact = signPolicyArtifact("1.0.0", JSONObject().apply {
                 put("context.query", "starlight")
@@ -322,7 +323,7 @@ class SkylarCorePhase3Test {
             callerId = testCallerId,
             capability = "context.query",
             issuedAt = now - 600_000L,
-            expiresAt = now - 300_000L,
+            expiresAt = now - 350_000L,
             scope = "read"
         )
 

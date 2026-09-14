@@ -23,6 +23,7 @@ import com.inscopelabs.abx.skylar.ipc.XtoolsBridge
 import com.inscopelabs.abx.skylar.ipc.aidl.IStarlightService
 import com.inscopelabs.abx.skylar.ipc.target.mock.MockSfmTargetService
 import com.inscopelabs.abx.skylar.ipc.target.mock.MockStarlightTargetService
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -187,11 +188,11 @@ class SkylarMockTargetDispatchTest {
 
         val matrixPayload = JSONObject().apply {
             put(testCallerId, JSONObject().apply {
-                put("context.query", listOf("read"))
-                put("starlight.workflow.start", listOf("execute"))
-                put("storage.read", listOf("read"))
-                put("storage.write", listOf("write"))
-                put("xtools.plugin.eval", listOf("execute"))
+                put("context.query", JSONArray(listOf("read")))
+                put("starlight.workflow.start", JSONArray(listOf("execute")))
+                put("storage.read", JSONArray(listOf("read")))
+                put("storage.write", JSONArray(listOf("write")))
+                put("xtools.plugin.eval", JSONArray(listOf("execute")))
             })
         }.toString()
         val routingPayload = JSONObject().apply {

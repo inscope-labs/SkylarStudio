@@ -101,7 +101,9 @@ class SkylarCore(
             val routingResult = policyReader.readRoutingTable(routingArtifact, parseRoutingTable)
 
             if (matrixResult.isError || routingResult.isError) {
-                Logger.e(TAG, "Signed policy artefact verification failed — failing closed to EMPTY")
+                val matErr = (matrixResult as? PolicyArtifactReader.Result.Error)?.let { "${it.message} (${it.errorCode})" }
+                val routeErr = (routingResult as? PolicyArtifactReader.Result.Error)?.let { "${it.message} (${it.errorCode})" }
+                Logger.e(TAG, "Signed policy artefact verification failed — failing closed to EMPTY: matrix=$matErr, routing=$routeErr")
                 authMatrix = AuthorizationMatrix.EMPTY
                 routingTable = RoutingTable.EMPTY
                 isInitialized = true

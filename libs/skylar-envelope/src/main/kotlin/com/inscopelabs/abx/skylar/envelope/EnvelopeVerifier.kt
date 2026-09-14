@@ -50,7 +50,7 @@ class EnvelopeVerifier(
 
         // 4. Nonce replay check (if cache provided)
         if (nonceCache != null) {
-            if (nonceCache.isSeen(envelope.nonce)) {
+            if (nonceCache.isSeen(envelope.callerId, envelope.nonce)) {
                 return deny("Replay detected: nonce '${envelope.nonce}' already seen", "REPLAY_DETECTED")
             }
         }
@@ -98,7 +98,7 @@ class EnvelopeVerifier(
         }
 
         // Mark nonce seen if verification passed
-        nonceCache?.markSeen(envelope.nonce, envelope.expiresAt)
+        nonceCache?.markSeen(envelope.callerId, envelope.nonce, envelope.expiresAt)
 
         EnvelopeLog.i(TAG, "Envelope verification SUCCESS for caller '${envelope.callerId}'")
         return EnvelopeVerificationResult.Success
