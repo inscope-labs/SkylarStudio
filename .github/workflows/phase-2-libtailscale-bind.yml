@@ -49,7 +49,12 @@ jobs:
           mkdir -p tools/tsnet-android-bind
           cd tools/tsnet-android-bind
           go mod init github.com/inscope-labs/skylarstudio/tools/tsnet-android-bind
-          go get -tool golang.org/x/mobile/cmd/gobind
+          # NOTE: gomobile's own error text suggests `go get -tool ...`, but
+          # -tool is Go 1.24+ only and this workflow pins go-version 1.23.0
+          # above. A plain `go get` adds x/mobile as a normal required
+          # dependency, which is all gomobile bind actually needs ("in the
+          # current module dependency graph") on any Go version.
+          go get golang.org/x/mobile/cmd/gobind
           go get tailscale.com/tsnet
 
       - name: Build tsnet Android AAR
