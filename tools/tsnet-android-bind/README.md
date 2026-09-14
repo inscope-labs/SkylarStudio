@@ -19,9 +19,13 @@ not in the module dependency graph.
 
 ## Why `go.mod` / `go.sum` aren't committed here
 
-They're generated fresh by the CI job itself (`go mod init`, `go get -tool
+They're generated fresh by the CI job itself (`go mod init`, `go get
 golang.org/x/mobile/cmd/gobind`, `go get tailscale.com/tsnet`) rather than
-hand-written and committed. This sandbox has no network path to the Go
+hand-written and committed. (An earlier version of this fix used `go get
+-tool ...` per gomobile's own suggested-fix text, but `-tool` is Go 1.24+
+only and this workflow pins Go 1.23.0 — a plain `go get` works on any Go
+version and satisfies the same "in the module dependency graph"
+requirement.) This sandbox has no network path to the Go
 module proxy to produce a real, checksummed `go.sum` — committing one typed
 by hand would be an unverifiable stand-in, not an actual pinned dependency
 graph. CI has real network access, so it resolves the real thing every run.
