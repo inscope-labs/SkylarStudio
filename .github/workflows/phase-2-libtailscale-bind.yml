@@ -61,8 +61,13 @@ jobs:
         run: |
           export PATH="$HOME/go/bin:$PATH"
           cd tools/tsnet-android-bind
+          # Bind the local wrapper package (./tsnetbind), not
+          # tailscale.com/tsnet directly — gobind can't bind tsnet's own
+          # exported surface as-is (Server.Loopback() returns 4 values;
+          # gobind allows at most one non-error return). See
+          # tsnetbind/tsnetbind.go's doc comment for the full explanation.
           # Target Android API 24 matching minSdk in app/build.gradle.kts
-          gomobile bind -target=android -androidapi=24 -o ../../tsnet-android.aar tailscale.com/tsnet
+          gomobile bind -target=android -androidapi=24 -o ../../tsnet-android.aar ./tsnetbind
 
       - name: Upload tsnet AAR artifact
         uses: actions/upload-artifact@v4
