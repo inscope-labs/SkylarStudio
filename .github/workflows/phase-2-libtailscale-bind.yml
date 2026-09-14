@@ -29,11 +29,35 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
+      - name: Bootstrap Go module for the binding (tools/tsnet-android-bind)
+        # Root cause of the prior failure: `gomobile bind` needs to run inside
+        # a real Go module that lists golang.org/x/mobile (specifically the
+        # gobind tool) as a dependency via a go.mod tool directive. This repo
+        # has no go.mod anywhere (it's a Kotlin/Android project) so there was
+        # nothing for it to resolve against.
+        #
+        # go.mod/go.sum are deliberately NOT committed to the repo and are
+        # generated fresh here instead: this sandbox has no path to the Go
+        # module proxy to produce a real, verifiable go.sum, and committing a
+        # hand-typed one would be exactly the kind of fabricated stand-in
+        # AGENTS.md §6 warns against. CI has real network access, so it
+        # resolves the actual dependency graph itself, every run. Once the
+        # spike is validated (go decision, not just build success), pin and
+        # commit a real go.mod/go.sum as a follow-up for reproducibility.
+        run: |
+          export PATH="$HOME/go/bin:$PATH"
+          mkdir -p tools/tsnet-android-bind
+          cd tools/tsnet-android-bind
+          go mod init github.com/inscope-labs/skylarstudio/tools/tsnet-android-bind
+          go get -tool golang.org/x/mobile/cmd/gobind
+          go get tailscale.com/tsnet
+
       - name: Build tsnet Android AAR
         run: |
           export PATH="$HOME/go/bin:$PATH"
+          cd tools/tsnet-android-bind
           # Target Android API 24 matching minSdk in app/build.gradle.kts
-          gomobile bind -target=android -androidapi=24 -o tsnet-android.aar tailscale.com/tsnet
+          gomobile bind -target=android -androidapi=24 -o ../../tsnet-android.aar tailscale.com/tsnet
 
       - name: Upload tsnet AAR artifact
         uses: actions/upload-artifact@v4
