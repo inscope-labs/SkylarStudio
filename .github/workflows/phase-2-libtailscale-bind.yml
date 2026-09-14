@@ -75,15 +75,34 @@ jobs:
           # matching minSdk in app/build.gradle.kts.
           gomobile bind -work -target=android -androidapi=24 -o ../../tsnet-android.aar ./tsnetbind 2>&1 | tee /tmp/gomobile-bind.log
 
-      - name: Commit the actual generated Java source for inspection
-        # This exists purely so the real gobind-generated Java API surface
-        # is readable via the GitHub Contents API. Logs and artifact
-        # downloads for this repo are served from a blob-storage host that
-        # isn't reachable from the environment doing this wiring work —
-        # committing the small set of real .java files here is the only
-        # way to verify their actual class/method names/signatures instead
-        # of guessing. Safe to run every time: this workflow only triggers
-        # on workflow_dispatch, so this push can't retrigger it.
+      - name: Commit the built AAR and generated Java source (vendoring + inspection)
+        # Two things happen here, both for the same underlying reason: this
+        # environment can't build tsnet-android.aar itself (no Go/NDK
+        # toolchain) and can't download it after the fact either (Actions
+        # artifact/log downloads are blob-storage-backed and unreachable
+        # from here) — so CI has to commit what it produces directly:
+        #
+        # 1. app/libs/tsnet-android.aar — the real, buildable artifact.
+        #    Without this committed, app/build.gradle.kts's file-existence
+        #    guard means the tsnet dependency silently isn't added, and
+        #    TsnetMeshNode.kt's `tsnetbind.Server` reference fails to
+        #    resolve in every build except this workflow's own job.
+        # 2. tools/tsnet-android-bind/generated-java-preview/*.java — the
+        #    actual gobind-generated source, so the real API surface
+        #    (class/method names, exception handling) is readable via the
+        #    Contents API instead of guessed at.
+        #
+        # Safe to run every time: this workflow only triggers on
+        # workflow_dispatch, so this push can't retrigger it.
+        #
+        # Known tradeoff, not silently absorbed: tsnet-android.aar is
+        # ~60MB and this commits it to git history on every run that
+        # rebuilds it, including re-runs with no real changes to the
+        # binding. Acceptable for now to unblock real end-to-end wiring
+        # during the spike; worth revisiting (e.g. Git LFS, a release
+        # asset instead of a tracked file, or only committing on an
+        # actual content change) once Phase 2 reaches a go/no-go and this
+        # stops being produced on every experimental re-run.
         run: |
           WORKDIR=$(grep -oE '^WORK=.*' /tmp/gomobile-bind.log | head -1 | cut -d= -f2)
           if [ -z "${WORKDIR}" ]; then
@@ -95,6 +114,10 @@ jobs:
             WORKDIR=$(ls -dt /tmp/gomobile-work-* 2>/dev/null | head -1)
           fi
           echo "gomobile work dir: ${WORKDIR}"
+
+          mkdir -p app/libs
+          cp tsnet-android.aar app/libs/tsnet-android.aar
+
           rm -rf tools/tsnet-android-bind/generated-java-preview
           mkdir -p tools/tsnet-android-bind/generated-java-preview
           if [ -n "${WORKDIR}" ] && [ -d "${WORKDIR}" ]; then
@@ -107,9 +130,9 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add tools/tsnet-android-bind/generated-java-preview
+          git add tools/tsnet-android-bind/generated-java-preview app/libs/tsnet-android.aar
           if ! git diff --cached --quiet; then
-            git commit -m "ci: commit actual gobind-generated Java source for tsnetbind (inspection only)"
+            git commit -m "ci: vendor built tsnet-android.aar + gobind-generated Java source"
             git push origin HEAD:main
           else
             echo "No changes to commit."

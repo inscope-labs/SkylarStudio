@@ -91,10 +91,22 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.kotlinx.coroutines.android)
 
-  // TODO(phase-2): once `gomobile bind` produces the tsnet Android artifact
-  // (Phase 2 §4 work item 1-2), add it here, e.g.:
-  //   implementation(files("libs/tsnet-android.aar"))
-  // or, if published to a registry:
-  //   implementation("com.tailscale:tsnet-android:<version>")
-  // Not added yet — no bound artifact exists in this repo as of this scaffold.
+  // Phase 2: bound tsnet artifact, produced by `gomobile bind` in
+  // .github/workflows/phase-2-libtailscale-bind.yml and committed to
+  // app/libs/ by that workflow's own CI job (see that file's "Commit the
+  // built tsnet AAR" step — this environment has no way to build or fetch
+  // the binary itself, only CI with real Go/NDK toolchains can produce it).
+  //
+  // Guarded by file existence so a hypothetically missing AAR doesn't
+  // break dependency resolution for the rest of the app with an opaque
+  // Gradle error. This is NOT a graceful fallback for TsnetMeshNode.kt
+  // itself, though: Kotlin can't conditionally skip a class reference, so
+  // TsnetMeshNode.kt importing tsnetbind.Server has a hard, unconditional
+  // dependency on this file actually being present — if it's ever
+  // missing, compilation fails there specifically, with a clear
+  // unresolved-reference error rather than this guard silently working
+  // around it.
+  if (file("libs/tsnet-android.aar").exists()) {
+    implementation(files("libs/tsnet-android.aar"))
+  }
 }
