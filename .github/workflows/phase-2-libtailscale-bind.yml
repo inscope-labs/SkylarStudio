@@ -7,6 +7,8 @@ jobs:
   build-tsnet-binding:
     name: Build tsnet Android Binding (gomobile)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -66,8 +68,52 @@ jobs:
           # exported surface as-is (Server.Loopback() returns 4 values;
           # gobind allows at most one non-error return). See
           # tsnetbind/tsnetbind.go's doc comment for the full explanation.
-          # Target Android API 24 matching minSdk in app/build.gradle.kts
-          gomobile bind -target=android -androidapi=24 -o ../../tsnet-android.aar ./tsnetbind
+          #
+          # -work retains gomobile's temporary work directory (normally
+          # deleted on exit) so the next step can pull the actual
+          # gobind-generated Java source out of it. Target Android API 24
+          # matching minSdk in app/build.gradle.kts.
+          gomobile bind -work -target=android -androidapi=24 -o ../../tsnet-android.aar ./tsnetbind 2>&1 | tee /tmp/gomobile-bind.log
+
+      - name: Commit the actual generated Java source for inspection
+        # This exists purely so the real gobind-generated Java API surface
+        # is readable via the GitHub Contents API. Logs and artifact
+        # downloads for this repo are served from a blob-storage host that
+        # isn't reachable from the environment doing this wiring work —
+        # committing the small set of real .java files here is the only
+        # way to verify their actual class/method names/signatures instead
+        # of guessing. Safe to run every time: this workflow only triggers
+        # on workflow_dispatch, so this push can't retrigger it.
+        run: |
+          WORKDIR=$(grep -oE '^WORK=.*' /tmp/gomobile-bind.log | head -1 | cut -d= -f2)
+          if [ -z "${WORKDIR}" ]; then
+            # Fallback: gomobile's work dirs follow /tmp/gomobile-work-<n>
+            # (confirmed in the original bind failure's own error path,
+            # e.g. -outdir=/tmp/gomobile-work-2321966322). Pick the most
+            # recently modified one if the WORK= line wasn't in the format
+            # expected.
+            WORKDIR=$(ls -dt /tmp/gomobile-work-* 2>/dev/null | head -1)
+          fi
+          echo "gomobile work dir: ${WORKDIR}"
+          rm -rf tools/tsnet-android-bind/generated-java-preview
+          mkdir -p tools/tsnet-android-bind/generated-java-preview
+          if [ -n "${WORKDIR}" ] && [ -d "${WORKDIR}" ]; then
+            find "${WORKDIR}" -name '*.java' -exec cp {} tools/tsnet-android-bind/generated-java-preview/ \;
+          fi
+          ls -la tools/tsnet-android-bind/generated-java-preview/ || true
+          if [ -z "$(ls -A tools/tsnet-android-bind/generated-java-preview/ 2>/dev/null)" ]; then
+            echo "No .java files found under the work dir — leaving a note instead." > tools/tsnet-android-bind/generated-java-preview/NOTE.txt
+            echo "WORK dir was: ${WORKDIR}" >> tools/tsnet-android-bind/generated-java-preview/NOTE.txt
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tools/tsnet-android-bind/generated-java-preview
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: commit actual gobind-generated Java source for tsnetbind (inspection only)"
+            git push origin HEAD:main
+          else
+            echo "No changes to commit."
+          fi
 
       - name: Upload tsnet AAR artifact
         uses: actions/upload-artifact@v4

@@ -45,14 +45,19 @@ type Server struct {
 	srv *tsnet.Server
 }
 
-// New constructs a Server. Nothing is started yet — call Start.
+// NewServer constructs a Server. Nothing is started yet — call Start.
+//
+// Named NewServer, not New: gobind's constructor recognition matches
+// `func NewT(...) *T` for type T specifically (confirmed against gomobile's
+// bind generator source/tests) — a bare `New` doesn't match that pattern
+// and would also collide with `new`, a reserved word in Java.
 //
 //   - hostname: the name this node presents on the tailnet.
 //   - authKey: short-lived Tailscale auth key (Phase 5/6 Issuer output).
 //   - stateDir: local directory for tsnet's persistent state. Must be a
 //     location the Android process can actually write to (e.g. the app's
 //     filesDir) — not decided/wired in from the Kotlin side yet.
-func New(hostname, authKey, stateDir string) *Server {
+func NewServer(hostname, authKey, stateDir string) *Server {
 	return &Server{
 		srv: &tsnet.Server{
 			Hostname: hostname,
